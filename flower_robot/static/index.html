@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="uz">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Flower Rover Control Center</title>
+    <link rel="stylesheet" href="/assets/style.css" />
+  </head>
+  <body>
+    <div class="rotate-overlay" id="rotateOverlay">
+      <div class="rotate-card">
+        <p class="mini-label">Landscape kerak</p>
+        <h1>Telefonni yonboshlating</h1>
+        <p class="rotate-text">
+          Bu panel telefonni gorizontal ushlash uchun mo'ljallangan. Yonboshlatganingizdan
+          keyin boshqaruv va kameralar bitta ekranda ko'rinadi.
+        </p>
+      </div>
+    </div>
+
+    <div class="app-shell">
+      <header class="top-strip">
+        <div class="strip-pill" id="esp32Badge">ESP32: tekshirilmoqda...</div>
+        <div class="strip-pill" id="motionBadge">Holat: stop</div>
+        <div class="strip-pill" id="marginBadge">Yo'lak zaxirasi: --</div>
+      </header>
+
+      <main class="operator-shell">
+        <section class="operator-layout">
+          <article class="control-column">
+            <p class="mini-label">Burilish</p>
+            <button class="drive-button side-button" id="turnLeftButton" type="button">Chapga</button>
+            <button class="drive-button side-button" id="turnRightButton" type="button">O'ngga</button>
+          </article>
+
+          <section class="camera-zone">
+            <article class="camera-card" id="leftCameraCard">
+              <div class="camera-head">
+                <h2>Chap kamera</h2>
+                <span id="leftCameraBadge" class="camera-badge">offline</span>
+              </div>
+              <img id="leftCameraStream" data-stream="/stream/left" alt="Chap kamera oqimi" />
+              <p class="camera-meta" id="leftCameraMeta">Gul aniqlash kutilmoqda...</p>
+            </article>
+
+            <article class="camera-card" id="frontCameraCard">
+              <div class="camera-head">
+                <h2>Old kamera</h2>
+                <span id="frontCameraBadge" class="camera-badge">offline</span>
+              </div>
+              <img id="frontCameraStream" data-stream="/stream/front" alt="Old kamera oqimi" />
+              <p class="camera-meta" id="frontCameraMeta">Yo'l kamerasi.</p>
+            </article>
+
+            <article class="camera-card" id="rightCameraCard">
+              <div class="camera-head">
+                <h2>O'ng kamera</h2>
+                <span id="rightCameraBadge" class="camera-badge">offline</span>
+              </div>
+              <img id="rightCameraStream" data-stream="/stream/right" alt="O'ng kamera oqimi" />
+              <p class="camera-meta" id="rightCameraMeta">Gul aniqlash kutilmoqda...</p>
+            </article>
+          </section>
+
+          <article class="control-column">
+            <p class="mini-label">Harakat</p>
+            <button class="drive-button motion-button" id="forwardButton" type="button">Oldinga</button>
+            <button class="drive-button motion-button reverse" id="backwardButton" type="button">Orqaga</button>
+          </article>
+        </section>
+
+        <section class="control-dock">
+          <article class="dock-card speed-card">
+            <p class="mini-label">Tezlik</p>
+            <div class="speed-readout"><span id="speedValue">120</span> / 255</div>
+            <label class="slider-wrap" for="speedSlider">
+              <input id="speedSlider" type="range" min="0" max="255" value="120" />
+            </label>
+          </article>
+
+          <article class="dock-card action-card">
+            <p class="mini-label">Asosiy boshqaruv</p>
+            <div class="action-row">
+              <button class="primary-button" id="stopButton" type="button">Emergency Stop</button>
+              <label class="toggle-card compact" for="autoSprayToggle">
+                <div>
+                  <strong>Auto spray</strong>
+                  <p>Chap va o'ng kamera markazga olib kelganda nasos pulse beradi.</p>
+                </div>
+                <input id="autoSprayToggle" type="checkbox" />
+              </label>
+            </div>
+          </article>
+        </section>
+
+        <section class="info-strip">
+          <article class="info-card">
+            <p class="mini-label">Ogohlantirishlar</p>
+            <ul id="warningsList" class="warning-list">
+              <li>Holat yangilanmoqda...</li>
+            </ul>
+          </article>
+          <article class="info-card">
+            <p class="mini-label">Qisqa holat</p>
+            <div id="diagEsp32">Ma'lumot kutilmoqda...</div>
+          </article>
+        </section>
+      </main>
+    </div>
+
+    <script src="/assets/app.js"></script>
+  </body>
+</html>

@@ -1,0 +1,434 @@
+:root {
+  --bg-top: #17301e;
+  --bg-bottom: #08120c;
+  --panel: rgba(15, 27, 20, 0.88);
+  --panel-strong: rgba(25, 44, 32, 0.96);
+  --line: rgba(169, 222, 135, 0.2);
+  --text: #f5f7ef;
+  --muted: #c8d3ca;
+  --leaf: #8fd36b;
+  --leaf-deep: #4f9d4c;
+  --soil: #cc8b40;
+  --sun: #ffd66b;
+  --danger: #ff8474;
+  --shadow: 0 24px 60px rgba(0, 0, 0, 0.35);
+  --radius-xl: 28px;
+  --radius-lg: 20px;
+  --radius-md: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top right, rgba(143, 211, 107, 0.12), transparent 28%),
+    radial-gradient(circle at bottom left, rgba(204, 139, 64, 0.14), transparent 26%),
+    linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  color: var(--text);
+  font-family: Verdana, Geneva, sans-serif;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.025) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+  background-size: 28px 28px;
+  pointer-events: none;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.app-shell {
+  position: relative;
+  z-index: 1;
+  padding: 18px;
+  min-height: 100dvh;
+}
+
+.rotate-overlay {
+  display: none;
+}
+
+.rotate-card {
+  width: min(92vw, 420px);
+  padding: 24px;
+  border-radius: 24px;
+  background: linear-gradient(135deg, rgba(16, 36, 24, 0.98), rgba(30, 58, 40, 0.94));
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.rotate-card h1 {
+  margin: 8px 0 12px;
+  font-size: clamp(1.8rem, 6vw, 2.4rem);
+  font-family: Bahnschrift, "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+.rotate-text {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.top-strip,
+.camera-card,
+.control-column,
+.dock-card,
+.info-card {
+  backdrop-filter: blur(18px);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow);
+}
+
+.mini-label {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--leaf);
+  font-size: 0.78rem;
+}
+
+.top-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  background: linear-gradient(135deg, rgba(16, 36, 24, 0.96), rgba(30, 58, 40, 0.86));
+  border-radius: 22px;
+  padding: 12px;
+}
+
+.strip-pill {
+  min-height: 48px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  text-align: center;
+}
+
+.eyebrow,
+.mini-label {
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  color: var(--leaf);
+  font-size: 0.78rem;
+}
+
+.operator-shell {
+  margin-top: 14px;
+  display: grid;
+  gap: 14px;
+}
+
+.camera-card {
+  background: linear-gradient(180deg, rgba(16, 28, 20, 0.95), rgba(10, 16, 11, 0.96));
+  border-radius: var(--radius-lg);
+  padding: 12px;
+}
+
+.camera-card img {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 14px;
+  object-fit: cover;
+  background: #0d1610;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.camera-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: baseline;
+}
+
+.camera-head h2 {
+  margin: 0;
+  font-family: Bahnschrift, "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+.camera-badge {
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  padding: 6px 12px;
+  color: var(--muted);
+}
+
+.camera-meta {
+  margin: 10px 0 0;
+  color: var(--muted);
+  min-height: 2.8em;
+}
+
+.operator-layout {
+  display: grid;
+  grid-template-columns: 220px 1fr 220px;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.camera-zone {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.control-column,
+.dock-card,
+.info-card {
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  padding: 14px;
+}
+
+.control-column {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  justify-content: center;
+}
+
+.speed-readout {
+  margin-top: 4px;
+  font-size: clamp(1.8rem, 5vw, 3rem);
+  font-family: Bahnschrift, "Trebuchet MS", "Segoe UI", sans-serif;
+}
+
+.slider-wrap {
+  display: block;
+  margin-top: 12px;
+}
+
+input[type="range"] {
+  width: 100%;
+}
+
+.control-dock {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  gap: 14px;
+}
+
+.action-row {
+  display: grid;
+  grid-template-columns: 240px 1fr;
+  gap: 12px;
+  align-items: center;
+}
+
+.primary-button,
+.secondary-button {
+  min-height: 56px;
+  border-radius: 16px;
+  border: 0;
+  cursor: pointer;
+  transition: transform 180ms ease, filter 180ms ease;
+}
+
+.primary-button {
+  background: linear-gradient(135deg, var(--soil), var(--sun));
+  color: #271507;
+  font-weight: 700;
+}
+
+.secondary-button {
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.drive-button {
+  min-height: 108px;
+  border-radius: 20px;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  font-size: clamp(1.3rem, 1.8vw, 2rem);
+  font-family: Bahnschrift, "Trebuchet MS", "Segoe UI", sans-serif;
+  transition: transform 140ms ease, filter 140ms ease, box-shadow 140ms ease;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+}
+
+.side-button {
+  background: linear-gradient(135deg, rgba(79, 157, 76, 0.95), rgba(143, 211, 107, 0.95));
+  color: #0f1b14;
+}
+
+.motion-button {
+  background: linear-gradient(135deg, rgba(255, 214, 107, 0.96), rgba(204, 139, 64, 0.96));
+  color: #271507;
+}
+
+.motion-button.reverse {
+  background: linear-gradient(135deg, rgba(255, 132, 116, 0.96), rgba(204, 88, 70, 0.96));
+  color: #fff5f3;
+}
+
+.drive-button.active-drive {
+  transform: scale(0.97);
+  filter: brightness(1.08);
+  box-shadow:
+    0 0 0 3px rgba(255, 255, 255, 0.08),
+    0 18px 40px rgba(0, 0, 0, 0.28);
+}
+
+.primary-button:active,
+.secondary-button:active,
+.drive-button:active {
+  transform: scale(0.97);
+}
+
+.toggle-card {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 18px;
+}
+
+.toggle-card.compact {
+  margin-top: 0;
+}
+
+.toggle-card p,
+.info-card p {
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.info-strip {
+  display: grid;
+  grid-template-columns: 1.1fr 0.9fr;
+  gap: 14px;
+}
+
+.warning-list {
+  margin: 10px 0 0;
+  padding-left: 18px;
+  color: var(--muted);
+  line-height: 1.55;
+}
+
+.info-card ul {
+  margin-bottom: 0;
+}
+
+.online {
+  color: #0f1b14;
+  background: linear-gradient(135deg, var(--leaf), #d9ff9f);
+}
+
+.offline {
+  color: var(--text);
+  background: rgba(255, 132, 116, 0.16);
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 1100px) {
+  .camera-zone {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (orientation: landscape) and (max-height: 520px) {
+  .app-shell {
+    padding: 10px;
+  }
+
+  .operator-shell {
+    gap: 10px;
+  }
+
+  .operator-layout {
+    grid-template-columns: 180px 1fr 180px;
+    gap: 10px;
+  }
+
+  .drive-button {
+    min-height: 82px;
+    font-size: 1.15rem;
+  }
+
+  .camera-card {
+    padding: 10px;
+  }
+
+  .camera-head h2 {
+    font-size: 1rem;
+  }
+
+  .camera-meta {
+    min-height: 1.8em;
+    font-size: 0.86rem;
+  }
+
+  .control-column,
+  .dock-card,
+  .info-card {
+    padding: 12px;
+  }
+
+  .top-strip {
+    padding: 10px;
+    gap: 10px;
+  }
+
+  .strip-pill {
+    min-height: 40px;
+    font-size: 0.9rem;
+  }
+}
+
+@media (orientation: portrait) {
+  body {
+    overflow: hidden;
+  }
+
+  .rotate-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background:
+      radial-gradient(circle at top right, rgba(143, 211, 107, 0.12), transparent 28%),
+      radial-gradient(circle at bottom left, rgba(204, 139, 64, 0.14), transparent 26%),
+      linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
+  }
+
+  .app-shell {
+    display: none;
+  }
+}

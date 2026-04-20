@@ -1,0 +1,8 @@
+numpy==2.4.4
+opencv-python==4.13.0.92
+Pillow==12.2.0
+PyYAML==6.0.3
+requests==2.33.1
+Jinja2==3.1.6
+ultralytics==8.4.38
+pyinstaller
