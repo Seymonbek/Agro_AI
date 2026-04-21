@@ -19,6 +19,7 @@ from flower_robot.vision import VisionHub
 
 
 STATIC_ROOT = resource_path("flower_robot", "static")
+SPRAY_ZONES = {"left", "front", "right"}
 
 
 def _json_bytes(payload: dict[str, Any]) -> bytes:
@@ -208,6 +209,7 @@ class AppContext:
                 "cooldown_ms": self.settings.auto_spray.cooldown_ms,
                 "center_tolerance_px": self.settings.auto_spray.center_tolerance_px,
                 "camera_to_pump": self.settings.auto_spray.camera_to_pump,
+                "spray_zones": sorted(SPRAY_ZONES),
             },
             "cameras": [
                 {
@@ -277,7 +279,7 @@ class AppContext:
 
     def handle_pump(self, payload: dict[str, Any]) -> dict[str, Any]:
         side = str(payload.get("side", "left"))
-        if side not in {"left", "right"}:
+        if side not in SPRAY_ZONES:
             return {"ok": False, "error": "invalid_pump_side"}
         enabled = bool(payload.get("enabled", False))
         self.esp32.set_pump(side, enabled)
@@ -344,12 +346,12 @@ class AppContext:
     def _build_notes(self) -> list[str]:
         margin = self.settings.measurements.lane_margin_cm
         notes = [
-            f"Yo'lak zaxirasi har tomonda taxminan {margin:.2f} sm.",
-            "Aniq avtonom yurish uchun ikki yon masofa sensori + encoder + IMU tavsiya qilinadi.",
+            f"Chel ustidagi yurish track'i bo'yicha mexanik zaxira taxminan {margin:.2f} sm.",
+            "Aniq avtonom yurish uchun chel center tracking + encoder + IMU tavsiya qilinadi.",
             "Laptopdagi local server telefon brauzeridan ochiladi, cloud server shart emas.",
         ]
         if self.settings.esp32.firmware_mode == "advanced":
-            notes.append("Auto spray yoqilsa YOLO markazga tushgan gul uchun mos nasosga pulse yuboriladi.")
+            notes.append("Auto spray yoqilsa left/front/right kamera markazga tushgan gul uchun mos kanalga pulse yuboriladi.")
         return notes
 
 

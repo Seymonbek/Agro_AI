@@ -52,11 +52,19 @@ class AutoSprayController:
     def _pulse_pump(self, camera_name: str, pump: str) -> None:
         self._esp32.set_pump(pump, True)
         current_state = self._state.snapshot()["spray"]
+        zones = current_state.get("zones", {})
+        zone_state = zones.get(pump, {"trigger_count": 0, "last_trigger_at": None})
+        triggered_at = time.strftime("%H:%M:%S")
+        zones[pump] = {
+            "trigger_count": int(zone_state.get("trigger_count", 0)) + 1,
+            "last_trigger_at": triggered_at,
+        }
         self._state.update_spray(
             last_camera=camera_name,
             last_pump=pump,
-            last_trigger_at=time.strftime("%H:%M:%S"),
+            last_trigger_at=triggered_at,
             trigger_count=int(current_state["trigger_count"]) + 1,
+            zones=zones,
         )
         time.sleep(self._config.pulse_ms / 1000.0)
         self._esp32.set_pump(pump, False)

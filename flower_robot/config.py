@@ -50,7 +50,7 @@ class AutoSprayConfig:
     cooldown_ms: int = 1200
     center_tolerance_px: int = 40
     camera_to_pump: dict[str, str] = field(
-        default_factory=lambda: {"left": "left", "right": "right"}
+        default_factory=lambda: {"left": "left", "front": "front", "right": "right"}
     )
 
 
@@ -99,12 +99,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pulse_ms": 350,
         "cooldown_ms": 1200,
         "center_tolerance_px": 40,
-        "camera_to_pump": {"left": "left", "right": "right"},
+        "camera_to_pump": {"left": "left", "front": "front", "right": "right"},
     },
     "cameras": [
-        {"name": "front", "source": 0, "enabled": True, "detect_flowers": False},
-        {"name": "left", "source": 2, "enabled": True, "detect_flowers": True},
-        {"name": "right", "source": 4, "enabled": True, "detect_flowers": True},
+        {"name": "front", "source": 0, "enabled": True, "detect_flowers": True},
+        {"name": "left", "source": 1, "enabled": True, "detect_flowers": True},
+        {"name": "right", "source": 2, "enabled": True, "detect_flowers": True},
     ],
 }
 

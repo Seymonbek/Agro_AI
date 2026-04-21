@@ -12,6 +12,8 @@ import cv2
 from flower_robot.config import AppSettings
 from flower_robot.paths import resource_path
 
+SPRAY_ZONES = {"left", "front", "right"}
+
 
 @dataclass
 class CheckResult:
@@ -90,16 +92,20 @@ def run_doctor(
         CheckResult(
             name="geometry",
             ok=lane_margin > 0,
-            detail=f"lane margin {lane_margin:.2f} cm",
-            fix="Robot eni yo'lakdan katta bo'lib qolgan." if lane_margin <= 0 else None,
+            detail=f"chel track margin {lane_margin:.2f} cm",
+            fix="Robot eni chel ustidagi xavfsiz yurish track'idan katta bo'lib qolgan."
+            if lane_margin <= 0
+            else None,
         )
     )
     results.append(
         CheckResult(
             name="geometry-warning",
             ok=lane_margin > 2.5,
-            detail=f"tor yo'lak: har tomonda {lane_margin:.2f} sm zaxira",
-            fix="Avtonom uchun yon sensor + encoder + IMU tavsiya qilinadi." if lane_margin <= 2.5 else None,
+            detail=f"tor chel usti track: har tomonda {lane_margin:.2f} sm zaxira",
+            fix="Chel ustida avtonom yurish uchun front vision + encoder + IMU tavsiya qilinadi."
+            if lane_margin <= 2.5
+            else None,
         )
     )
 
@@ -120,6 +126,26 @@ def run_doctor(
                 detail=f"firmware_mode={settings.esp32.firmware_mode}",
             )
         )
+
+    mapping_errors = [
+        f"{camera}->{pump}"
+        for camera, pump in settings.auto_spray.camera_to_pump.items()
+        if pump not in SPRAY_ZONES
+    ]
+    results.append(
+        CheckResult(
+            name="spray-mapping",
+            ok=not mapping_errors,
+            detail=(
+                "left/front/right mapping OK"
+                if not mapping_errors
+                else ", ".join(mapping_errors)
+            ),
+            fix="camera_to_pump faqat left, front yoki right kanallariga ulanishi kerak."
+            if mapping_errors
+            else None,
+        )
+    )
 
     enabled_cameras = [camera for camera in settings.cameras if camera.enabled]
     if skip_cameras:

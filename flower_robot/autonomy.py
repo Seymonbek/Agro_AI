@@ -9,6 +9,8 @@ from flower_robot.config import MeasurementsConfig
 from flower_robot.esp32_client import ESP32Client
 from flower_robot.state import RobotStateStore
 
+SPRAY_ZONES = {"left", "front", "right"}
+
 
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
@@ -52,7 +54,7 @@ def build_mission_plan(payload: dict[str, Any], measurements: MeasurementsConfig
     ]
     if measurements.lane_margin_cm <= 2.5:
         warnings.append(
-            "70 sm yo'lak va 65-66 sm robotda markazdan siljish uchun joy juda kam."
+            "Chel ustidagi yurish track'i tor: markazdan siljish uchun joy juda kam."
         )
 
     plan_segments: list[MissionSegment] = []
@@ -87,7 +89,7 @@ def build_mission_plan(payload: dict[str, Any], measurements: MeasurementsConfig
                 right=right,
                 duration_seconds=round(seconds, 2),
                 distance_m=max(meters, 0.0),
-                pump=pump if pump in {"left", "right"} else None,
+                pump=pump if pump in SPRAY_ZONES else None,
             )
         )
 

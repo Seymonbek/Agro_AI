@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import Any
@@ -9,6 +10,8 @@ from urllib.request import urlopen
 
 from flower_robot.config import Esp32Config
 from flower_robot.state import RobotStateStore
+
+SPRAY_ZONES = {"left", "front", "right"}
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -40,7 +43,20 @@ class ESP32Client:
     def poll_status(self) -> None:
         try:
             path = "/api/status" if self._config.firmware_mode == "advanced" else "/"
-            self._request(path)
+            body = self._request(path)
+            if self._config.firmware_mode == "advanced":
+                try:
+                    payload = json.loads(body)
+                except json.JSONDecodeError:
+                    payload = {}
+                pumps = payload.get("pumps")
+                if isinstance(pumps, dict):
+                    self._state.update_pumps(
+                        **{
+                            zone: bool(pumps.get(zone, False))
+                            for zone in SPRAY_ZONES
+                        }
+                    )
         except Exception as exc:  # noqa: BLE001 - network calls fail for many reasons.
             self._state.update_esp32(online=False, last_error=str(exc))
 
@@ -94,11 +110,12 @@ class ESP32Client:
                 self._request(self._legacy_path("stop"))
             self._last_signature = (0.0, 0.0, 0)
             self._last_sent_at = time.monotonic()
+            self._state.update_pumps(left=False, front=False, right=False)
         except (URLError, TimeoutError, OSError) as exc:
             self._state.update_esp32(online=False, last_error=str(exc))
 
     def set_pump(self, side: str, enabled: bool) -> None:
-        if side not in {"left", "right"}:
+        if side not in SPRAY_ZONES:
             return
 
         try:

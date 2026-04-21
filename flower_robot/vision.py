@@ -172,7 +172,88 @@ class CameraWorker:
         success, buffer = cv2.imencode(".jpg", frame)
         return buffer.tobytes() if success else b""
 
+    def _run_demo(self) -> None:
+        width = self._settings.vision.stream_width
+        height = self._settings.vision.stream_height
+        last_fps_tick = time.monotonic()
+        frames_since_tick = 0
+        fps = 0.0
+        frame_number = 0
+        color_by_camera = {
+            "front": (68, 190, 255),
+            "left": (122, 209, 109),
+            "right": (244, 180, 84),
+        }
+        accent = color_by_camera.get(self.camera.name, (122, 209, 109))
+
+        while not self._stop_event.is_set():
+            frame_number += 1
+            frames_since_tick += 1
+            frame = np.zeros((height, width, 3), dtype=np.uint8)
+            frame[:] = (20, 31, 27)
+            cv2.rectangle(frame, (0, 0), (width, height), (30, 47, 39), -1)
+            cv2.line(frame, (width // 2, 0), (width // 2, height), (255, 214, 102), 2)
+
+            lane_top = width // 2 - 74
+            lane_bottom = width // 2 - 150
+            cv2.polylines(
+                frame,
+                [
+                    np.array(
+                        [
+                            [lane_top, 70],
+                            [width - lane_top, 70],
+                            [width - lane_bottom, height - 40],
+                            [lane_bottom, height - 40],
+                        ],
+                        dtype=np.int32,
+                    )
+                ],
+                isClosed=True,
+                color=(65, 92, 73),
+                thickness=3,
+            )
+
+            flower_x = int((width // 2) + np.sin(frame_number / 18.0) * 90)
+            flower_y = int(height * 0.58)
+            cv2.circle(frame, (flower_x, flower_y), 34, accent, -1)
+            cv2.circle(frame, (flower_x, flower_y), 9, (255, 255, 255), -1)
+            cv2.putText(
+                frame,
+                "DEMO CAMERA - real nasos trigger qilinmaydi",
+                (28, height - 28),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.68,
+                (230, 238, 235),
+                2,
+            )
+
+            now = time.monotonic()
+            if now - last_fps_tick >= 1.0:
+                fps = frames_since_tick / max(now - last_fps_tick, 0.001)
+                frames_since_tick = 0
+                last_fps_tick = now
+
+            self._draw_overlay(frame, fps)
+            success, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            if success:
+                with self._frame_lock:
+                    self._latest_jpeg = encoded.tobytes()
+            self._state.update_camera(
+                self.camera.name,
+                online=True,
+                fps=round(fps, 1),
+                detections=0,
+                last_detection=None,
+                error=None,
+            )
+            self._stop_event.wait(0.12)
+
     def _run(self) -> None:
+        if isinstance(self.camera.source, str) and self.camera.source.startswith("demo:"):
+            self._run_demo()
+            return
+
         capture = cv2.VideoCapture(self.camera.source)
         last_fps_tick = time.monotonic()
         frames_since_tick = 0

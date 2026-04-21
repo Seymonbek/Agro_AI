@@ -5,7 +5,7 @@
 
   Vazifalari:
   1. Ikkita BTS7960 driver orqali tank usulida harakatlantirish
-  2. 2 ta nasos chiqishini boshqarish
+  2. 3 ta nasos/valve chiqishini boshqarish
   3. Wi-Fi Access Point ko'tarish
   4. Laptop server uchun HTTP API berish
   5. Eski /F /B /L /R /S buyruqlarini ham qo'llab-quvvatlash
@@ -14,12 +14,13 @@
   MUHIM:
   - Motor pinlari siz yuborgan kod bo'yicha qoldirildi.
   - Nasos pinlari bu yerda xavfsiz tavsiya pinlarga qo'yildi.
-    Agar hardware allaqachon boshqa pinlarga ulangan bo'lsa, shu 2 ta #define ni o'zgartiring.
+    Agar hardware allaqachon boshqa pinlarga ulangan bo'lsa, shu 3 ta #define ni o'zgartiring.
+  - Default spray pinlari: left=GPIO16, front=GPIO23, right=GPIO17.
 
   TIZIM MANTIGI:
   - Chap kamera gul markazini topsa -> chap nasos ishlaydi
+  - Old kamera gul markazini topsa -> old/front nasos yoki valve ishlaydi
   - O'ng kamera gul markazini topsa -> o'ng nasos ishlaydi
-  - Old kamera NASOSGA ulanmaydi, u faqat yo'lni ko'rish uchun
 
   ESlATMA:
   - Bu kod ESP32 tomonidagi "bajaruvchi" qism.
@@ -36,6 +37,12 @@
 // =========================================================
 const char *AP_SSID = "123";
 const char *AP_PASSWORD = "12345678";
+const uint8_t AP_CHANNEL = 6;
+const uint8_t AP_MAX_CONNECTIONS = 4;
+const unsigned long AP_HEALTHCHECK_MS = 5000;
+IPAddress AP_IP(192, 168, 4, 1);
+IPAddress AP_GATEWAY(192, 168, 4, 1);
+IPAddress AP_SUBNET(255, 255, 255, 0);
 
 // =========================================================
 #define LEFT_RPWM 25
@@ -51,11 +58,12 @@ const char *AP_PASSWORD = "12345678";
 
 
 #define PUMP_LEFT_PIN 16
+#define PUMP_FRONT_PIN 23
 #define PUMP_RIGHT_PIN 17
 
 // Agar relay HIGH signal bilan ishlasa true.
 // Agar relay LOW signal bilan ishlasa false.
-const bool PUMP_ACTIVE_HIGH = true;
+const bool PUMP_ACTIVE_HIGH = false;
 
 int speedLimit = 120;                 // Asosiy tezlik limiti: 0..255
 const int MIN_EFFECTIVE_PWM = 55;     // Juda kichik PWM da motor qimirlamasa shu pastki chegara ishlaydi
@@ -69,7 +77,11 @@ const unsigned long MOTOR_FAILSAFE_MS = 1200;
 WebServer server(80);
 unsigned long lastDriveCommandMs = 0;
 unsigned long lastRampUpdateMs = 0;
+unsigned long lastApHealthcheckMs = 0;
 bool motorsAreMoving = false;
+bool pumpLeftState = false;
+bool pumpFrontState = false;
+bool pumpRightState = false;
 float targetLeftNormalized = 0.0f;
 float targetRightNormalized = 0.0f;
 float currentLeftNormalized = 0.0f;
@@ -98,16 +110,22 @@ void writePumpPin(int pin, bool enabled) {
 // Qaysi nasos yoqilishini tanlaydi.
 void setPumpState(const String &side, bool enabled) {
   if (side == "left") {
+    pumpLeftState = enabled;
     writePumpPin(PUMP_LEFT_PIN, enabled);
+  } else if (side == "front") {
+    pumpFrontState = enabled;
+    writePumpPin(PUMP_FRONT_PIN, enabled);
   } else if (side == "right") {
+    pumpRightState = enabled;
     writePumpPin(PUMP_RIGHT_PIN, enabled);
   }
 }
 
 // Barcha nasoslarni xavfsizlik uchun o'chiradi.
 void disableAllPumps() {
-  writePumpPin(PUMP_LEFT_PIN, false);
-  writePumpPin(PUMP_RIGHT_PIN, false);
+  setPumpState("left", false);
+  setPumpState("front", false);
+  setPumpState("right", false);
 }
 
 // Barcha motorlarni to'xtatadi.
@@ -220,6 +238,14 @@ String buildStatusJson() {
   json += "\"ssid\":\"" + String(AP_SSID) + "\",";
   json += "\"speedLimit\":" + String(speedLimit) + ",";
   json += "\"failsafeMs\":" + String(MOTOR_FAILSAFE_MS) + ",";
+  json += "\"pumps\":{";
+  json += "\"left\":";
+  json += pumpLeftState ? "true" : "false";
+  json += ",\"front\":";
+  json += pumpFrontState ? "true" : "false";
+  json += ",\"right\":";
+  json += pumpRightState ? "true" : "false";
+  json += "},";
   json += "\"uptimeMs\":" + String(millis());
   json += "}";
   return json;
@@ -227,6 +253,16 @@ String buildStatusJson() {
 
 void sendStatus() {
   server.send(200, "application/json", buildStatusJson());
+}
+
+// Wi-Fi AP ni barqaror ushlash: fixed IP, aniq channel, sleep off.
+bool startAccessPoint() {
+  WiFi.persistent(false);
+  WiFi.setSleep(false);
+  WiFi.mode(WIFI_AP);
+  delay(150);
+  WiFi.softAPConfig(AP_IP, AP_GATEWAY, AP_SUBNET);
+  return WiFi.softAP(AP_SSID, AP_PASSWORD, AP_CHANNEL, 0, AP_MAX_CONNECTIONS);
 }
 
 // ADVANCED API
@@ -237,6 +273,8 @@ void sendStatus() {
 // /api/speed?value=180
 // /api/drive?left=0.7&right=0.7&speed=180
 // /api/pump?side=left&state=on
+// /api/pump?side=front&state=on
+// /api/pump?side=right&state=on
 // /api/stop
 void handleApiStatus() {
   sendStatus();
@@ -265,12 +303,12 @@ void handleApiDrive() {
 }
 
 // Nasosni yoqish/o'chirish endpointi.
-// side = left yoki right
+// side = left, front yoki right
 // state = on yoki off
 void handleApiPump() {
   String side = server.hasArg("side") ? server.arg("side") : "left";
   bool enabled = server.hasArg("state") && server.arg("state") == "on";
-  if (side != "left" && side != "right") {
+  if (side != "left" && side != "front" && side != "right") {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid_pump_side\"}");
     return;
   }
@@ -281,6 +319,7 @@ void handleApiPump() {
 // Zudlik bilan motorni to'xtatish endpointi.
 void handleApiStop() {
   stopMotors();
+  disableAllPumps();
   sendStatus();
 }
 
@@ -311,6 +350,7 @@ void handleRight() {
 
 void handleStopLegacy() {
   stopMotors();
+  disableAllPumps();
   server.send(200, "text/plain", "STOP");
 }
 
@@ -327,6 +367,12 @@ void handleRoot() {
   html += "<p><a href='/L'><button>Chap</button></a> <a href='/S'><button>Stop</button></a> <a href='/R'><button>O'ng</button></a></p>";
   html += "<p><a href='/B'><button>Orqaga</button></a></p>";
   html += "<p><a href='/api/status'><button>Status JSON</button></a></p>";
+  html += "<p><a href='/api/pump?side=left&state=on'><button>Left ON</button></a> ";
+  html += "<a href='/api/pump?side=front&state=on'><button>Front ON</button></a> ";
+  html += "<a href='/api/pump?side=right&state=on'><button>Right ON</button></a></p>";
+  html += "<p><a href='/api/pump?side=left&state=off'><button>Left OFF</button></a> ";
+  html += "<a href='/api/pump?side=front&state=off'><button>Front OFF</button></a> ";
+  html += "<a href='/api/pump?side=right&state=off'><button>Right OFF</button></a></p>";
   html += "</body></html>";
   server.send(200, "text/html", html);
 }
@@ -355,6 +401,7 @@ void setup() {
 
   // Nasos chiqish pinlari
   pinMode(PUMP_LEFT_PIN, OUTPUT);
+  pinMode(PUMP_FRONT_PIN, OUTPUT);
   pinMode(PUMP_RIGHT_PIN, OUTPUT);
 
   // Qurilma yoqilganda xavfsiz holat:
@@ -366,8 +413,7 @@ void setup() {
   lastRampUpdateMs = millis();
 
   // ESP32 o'zi Wi-Fi nuqta bo'ladi
-  WiFi.mode(WIFI_AP);
-  WiFi.softAP(AP_SSID, AP_PASSWORD);
+  bool apOk = startAccessPoint();
 
   // Asosiy web sahifa
   server.on("/", handleRoot);
@@ -396,6 +442,8 @@ void setup() {
   Serial.println(AP_SSID);
   Serial.print("Password: ");
   Serial.println(AP_PASSWORD);
+  Serial.print("AP started: ");
+  Serial.println(apOk ? "YES" : "NO");
   Serial.print("AP IP: ");
   Serial.println(WiFi.softAPIP());
   Serial.println("====================================");
@@ -407,6 +455,15 @@ void setup() {
 void loop() {
   // Har bir kelgan HTTP so'rovni qabul qiladi
   server.handleClient();
+
+  // Wi-Fi AP tushib qolsa qayta ko'taramiz.
+  if (millis() - lastApHealthcheckMs > AP_HEALTHCHECK_MS) {
+    lastApHealthcheckMs = millis();
+    if (WiFi.getMode() != WIFI_AP || WiFi.softAPIP()[0] == 0) {
+      Serial.println("Wi-Fi AP qayta ishga tushirilmoqda...");
+      startAccessPoint();
+    }
+  }
 
   // Tezlikni birdan emas, silliq ko'taradi/tushiradi.
   updateDriveRamp();

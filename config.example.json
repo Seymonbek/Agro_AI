@@ -29,6 +29,7 @@
     "center_tolerance_px": 40,
     "camera_to_pump": {
       "left": "left",
+      "front": "front",
       "right": "right"
     }
   },
@@ -37,17 +38,17 @@
       "name": "front",
       "source": 0,
       "enabled": true,
-      "detect_flowers": false
+      "detect_flowers": true
     },
     {
       "name": "left",
-      "source": 2,
+      "source": 1,
       "enabled": true,
       "detect_flowers": true
     },
     {
       "name": "right",
-      "source": 4,
+      "source": 2,
       "enabled": true,
       "detect_flowers": true
     }

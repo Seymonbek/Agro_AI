@@ -56,6 +56,26 @@ class FlowerRobotCoreTests(unittest.TestCase):
         self.assertEqual(fake_esp.calls, [("left", True), ("left", False)])
         self.assertEqual(state.snapshot()["spray"]["last_pump"], "left")
 
+    def test_front_auto_spray_maps_to_front_pump(self) -> None:
+        settings = load_settings()
+        state = RobotStateStore(settings)
+        state.update_control(auto_spray=True)
+        fake_esp = FakeESP32()
+        controller = AutoSprayController(settings.auto_spray, fake_esp, state)
+        controller.maybe_trigger(
+            "front",
+            DetectionResult(
+                detections=1,
+                last_detection={"centered": True},
+                centered_detection={"centered": True},
+            ),
+        )
+        time.sleep((settings.auto_spray.pulse_ms / 1000.0) + 0.1)
+        self.assertEqual(fake_esp.calls, [("front", True), ("front", False)])
+        snapshot = state.snapshot()["spray"]
+        self.assertEqual(snapshot["last_pump"], "front")
+        self.assertEqual(snapshot["zones"]["front"]["trigger_count"], 1)
+
 
 if __name__ == "__main__":
     unittest.main()

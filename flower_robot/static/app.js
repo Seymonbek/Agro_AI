@@ -1,8 +1,12 @@
+const CAMERA_NAMES = ["left", "front", "right"];
+const SPRAY_ZONES = ["left", "front", "right"];
+
 const state = {
   speedLimit: 120,
   activeButtons: new Set(),
   availableCameras: new Set(),
   commandSeq: 0,
+  activePage: "operator",
 };
 
 const TURN_FACTOR = 0.7;
@@ -12,17 +16,32 @@ let driveHoldTimer = null;
 const elements = {
   esp32Badge: document.getElementById("esp32Badge"),
   motionBadge: document.getElementById("motionBadge"),
-  marginBadge: document.getElementById("marginBadge"),
+  modeBadge: document.getElementById("modeBadge"),
+  operatorPage: document.getElementById("operatorPage"),
+  diagnosticsPage: document.getElementById("diagnosticsPage"),
+  operatorPageButton: document.getElementById("operatorPageButton"),
+  diagnosticsPageButton: document.getElementById("diagnosticsPageButton"),
   speedValue: document.getElementById("speedValue"),
   speedSlider: document.getElementById("speedSlider"),
   stopButton: document.getElementById("stopButton"),
   autoSprayToggle: document.getElementById("autoSprayToggle"),
+  mainEsp32Metric: document.getElementById("mainEsp32Metric"),
+  mainEsp32Detail: document.getElementById("mainEsp32Detail"),
+  mainMotionMetric: document.getElementById("mainMotionMetric"),
+  mainModeMetric: document.getElementById("mainModeMetric"),
   turnLeftButton: document.getElementById("turnLeftButton"),
   turnRightButton: document.getElementById("turnRightButton"),
   forwardButton: document.getElementById("forwardButton"),
   backwardButton: document.getElementById("backwardButton"),
   warningsList: document.getElementById("warningsList"),
   diagEsp32: document.getElementById("diagEsp32"),
+  esp32Metric: document.getElementById("esp32Metric"),
+  speedMetric: document.getElementById("speedMetric"),
+  autoSprayMetric: document.getElementById("autoSprayMetric"),
+  lastSprayMetric: document.getElementById("lastSprayMetric"),
+  leftPumpState: document.getElementById("leftPumpState"),
+  frontPumpState: document.getElementById("frontPumpState"),
+  rightPumpState: document.getElementById("rightPumpState"),
   leftCameraBadge: document.getElementById("leftCameraBadge"),
   frontCameraBadge: document.getElementById("frontCameraBadge"),
   rightCameraBadge: document.getElementById("rightCameraBadge"),
@@ -77,6 +96,36 @@ function nextCommandSeq() {
   return state.commandSeq;
 }
 
+function setPage(pageName, shouldStop = false) {
+  const nextPage = pageName === "diagnostics" ? "diagnostics" : "operator";
+  state.activePage = nextPage;
+
+  elements.operatorPage.hidden = nextPage !== "operator";
+  elements.diagnosticsPage.hidden = nextPage !== "diagnostics";
+  elements.operatorPage.classList.toggle("active-page", nextPage === "operator");
+  elements.diagnosticsPage.classList.toggle("active-page", nextPage === "diagnostics");
+  elements.operatorPageButton.classList.toggle("active-tab", nextPage === "operator");
+  elements.diagnosticsPageButton.classList.toggle("active-tab", nextPage === "diagnostics");
+
+  if (shouldStop && nextPage !== "operator") {
+    void clearDriveAndStop();
+  }
+}
+
+elements.operatorPageButton.addEventListener("click", () => {
+  history.replaceState(null, "", "#operator");
+  setPage("operator");
+});
+
+elements.diagnosticsPageButton.addEventListener("click", () => {
+  history.replaceState(null, "", "#diagnostics");
+  setPage("diagnostics", true);
+});
+
+window.addEventListener("hashchange", () => {
+  setPage(location.hash === "#diagnostics" ? "diagnostics" : "operator", true);
+});
+
 function getAxes() {
   const horizontal =
     Number(state.activeButtons.has("right")) - Number(state.activeButtons.has("left"));
@@ -93,37 +142,29 @@ function getDriveValues() {
 }
 
 function motionLabel(horizontal, vertical) {
-  if (horizontal === 0 && vertical === 0) {
-    return "stop";
-  }
-  if (vertical > 0 && horizontal === 0) {
-    return "oldinga";
-  }
-  if (vertical < 0 && horizontal === 0) {
-    return "orqaga";
-  }
-  if (horizontal < 0 && vertical === 0) {
-    return "chapga";
-  }
-  if (horizontal > 0 && vertical === 0) {
-    return "o'ngga";
-  }
-  if (vertical > 0 && horizontal < 0) {
-    return "oldinga + chapga";
-  }
-  if (vertical > 0 && horizontal > 0) {
-    return "oldinga + o'ngga";
-  }
-  if (vertical < 0 && horizontal < 0) {
-    return "orqaga + chapga";
-  }
+  if (horizontal === 0 && vertical === 0) return "stop";
+  if (vertical > 0 && horizontal === 0) return "oldinga";
+  if (vertical < 0 && horizontal === 0) return "orqaga";
+  if (horizontal < 0 && vertical === 0) return "chapga";
+  if (horizontal > 0 && vertical === 0) return "o'ngga";
+  if (vertical > 0 && horizontal < 0) return "oldinga + chapga";
+  if (vertical > 0 && horizontal > 0) return "oldinga + o'ngga";
+  if (vertical < 0 && horizontal < 0) return "orqaga + chapga";
   return "orqaga + o'ngga";
 }
 
-const sendDriveKeepalive = throttle(async () => {
+async function sendDrivePayload(payload) {
+  try {
+    await postJson("/api/control/tank", payload);
+  } catch (error) {
+    elements.motionBadge.textContent = `Harakat: server xato`;
+  }
+}
+
+const sendDriveKeepalive = throttle(() => {
   const { left, right, horizontal, vertical } = getDriveValues();
-  elements.motionBadge.textContent = `Holat: ${motionLabel(horizontal, vertical)}`;
-  await postJson("/api/control/tank", {
+  elements.motionBadge.textContent = `Harakat: ${motionLabel(horizontal, vertical)}`;
+  void sendDrivePayload({
     left,
     right,
     speed_limit: state.speedLimit,
@@ -133,14 +174,14 @@ const sendDriveKeepalive = throttle(async () => {
 
 async function sendCurrentDriveState() {
   const { left, right, horizontal, vertical } = getDriveValues();
-  elements.motionBadge.textContent = `Holat: ${motionLabel(horizontal, vertical)}`;
+  elements.motionBadge.textContent = `Harakat: ${motionLabel(horizontal, vertical)}`;
 
   if (horizontal === 0 && vertical === 0) {
     await postJson("/api/control/stop", { seq: nextCommandSeq() });
     return;
   }
 
-  await postJson("/api/control/tank", {
+  await sendDrivePayload({
     left,
     right,
     speed_limit: state.speedLimit,
@@ -150,6 +191,7 @@ async function sendCurrentDriveState() {
 
 function renderSpeed() {
   elements.speedValue.textContent = String(state.speedLimit);
+  elements.speedMetric.textContent = String(state.speedLimit);
 }
 
 function markButtonActive() {
@@ -182,9 +224,7 @@ function attachDriveButton(element, key) {
 
   const release = (event) => {
     activePointers.delete(event.pointerId);
-    if (activePointers.size === 0) {
-      releaseDirection(key);
-    }
+    if (activePointers.size === 0) releaseDirection(key);
   };
 
   element.addEventListener("pointerup", release);
@@ -208,24 +248,25 @@ function syncDriveHoldTimer() {
   }
 }
 
+function clearDriveAndStop() {
+  state.activeButtons.clear();
+  markButtonActive();
+  syncDriveHoldTimer();
+  elements.motionBadge.textContent = "Harakat: stop";
+  return postJson("/api/control/stop", { seq: nextCommandSeq() });
+}
+
 attachDriveButton(elements.turnLeftButton, "left");
 attachDriveButton(elements.turnRightButton, "right");
 attachDriveButton(elements.forwardButton, "forward");
 attachDriveButton(elements.backwardButton, "backward");
 
 window.addEventListener("blur", () => {
-  state.activeButtons.clear();
-  markButtonActive();
-  syncDriveHoldTimer();
-  void sendCurrentDriveState();
+  void clearDriveAndStop();
 });
 
 elements.stopButton.addEventListener("click", async () => {
-  state.activeButtons.clear();
-  markButtonActive();
-  syncDriveHoldTimer();
-  elements.motionBadge.textContent = "Holat: stop";
-  await postJson("/api/control/stop", { seq: nextCommandSeq() });
+  await clearDriveAndStop();
 });
 
 elements.speedSlider.addEventListener("input", () => {
@@ -241,8 +282,20 @@ elements.autoSprayToggle.addEventListener("change", async () => {
   await postJson("/api/control/auto-spray", { enabled: elements.autoSprayToggle.checked });
 });
 
+document.querySelectorAll(".test-pump-button").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const side = button.dataset.pump;
+    button.disabled = true;
+    await postJson("/api/control/pump", { side, enabled: true });
+    setTimeout(async () => {
+      await postJson("/api/control/pump", { side, enabled: false });
+      button.disabled = false;
+    }, 350);
+  });
+});
+
 function setBadge(element, isOnline, onlineText, offlineText) {
-  element.classList.toggle("online", isOnline);
+  element.classList.toggle("online", Boolean(isOnline));
   element.classList.toggle("offline", !isOnline);
   element.textContent = isOnline ? onlineText : offlineText;
 }
@@ -261,17 +314,10 @@ function setCameraDisabled(name) {
 
 function configureCameraCards(cameraList) {
   state.availableCameras = new Set(cameraList.map((camera) => camera.name));
-  ["left", "front", "right"].forEach((name) => {
-    const stream =
-      name === "left"
-        ? elements.leftCameraStream
-        : name === "front"
-          ? elements.frontCameraStream
-          : elements.rightCameraStream;
+  CAMERA_NAMES.forEach((name) => {
+    const stream = elements[`${name}CameraStream`];
     if (state.availableCameras.has(name)) {
-      if (!stream.src) {
-        stream.src = stream.dataset.stream;
-      }
+      if (!stream.src) stream.src = stream.dataset.stream;
     } else {
       setCameraDisabled(name);
     }
@@ -279,21 +325,25 @@ function configureCameraCards(cameraList) {
 }
 
 function cameraMeta(camera, fallback) {
-  if (!camera) {
-    return fallback;
-  }
-  if (!camera.online) {
-    return camera.error || "Offline";
-  }
-  if (camera.last_detection) {
-    const detection = camera.last_detection;
-    return `FPS ${camera.fps} | det ${camera.detections} | offset ${detection.offset_px}px`;
-  }
-  return `FPS ${camera.fps} | det ${camera.detections}`;
+  if (!camera) return fallback;
+  if (!camera.online) return camera.error || "Offline";
+  const detection = camera.last_detection;
+  if (!detection) return `FPS ${camera.fps} | det ${camera.detections}`;
+  const centered = detection.centered ? "CENTER" : "offset";
+  return `FPS ${camera.fps} | det ${camera.detections} | ${centered} ${detection.offset_px}px | conf ${detection.confidence}`;
 }
 
 function listToHtml(items) {
   return items.map((item) => `<li>${item}</li>`).join("");
+}
+
+function renderPumpStates(pumps) {
+  SPRAY_ZONES.forEach((zone) => {
+    const element = elements[`${zone}PumpState`];
+    const enabled = Boolean(pumps?.[zone]);
+    element.textContent = enabled ? "ON" : "OFF";
+    element.classList.toggle("pump-on", enabled);
+  });
 }
 
 async function loadConfig() {
@@ -310,10 +360,11 @@ async function refreshState() {
   try {
     const response = await fetch("/api/state");
     const snapshot = await response.json();
-    const measurements = snapshot.measurements;
-    const esp32 = snapshot.esp32;
-    const control = snapshot.control;
-    const spray = snapshot.spray;
+    const measurements = snapshot.measurements || {};
+    const esp32 = snapshot.esp32 || {};
+    const control = snapshot.control || {};
+    const spray = snapshot.spray || {};
+    const cameras = snapshot.cameras || {};
 
     setBadge(
       elements.esp32Badge,
@@ -321,30 +372,35 @@ async function refreshState() {
       `ESP32: online | ${esp32.firmware_mode}`,
       `ESP32: offline | ${esp32.last_error || "javob yo'q"}`
     );
-    elements.marginBadge.textContent = `Yo'lak zaxirasi: ${measurements.lane_margin_cm} sm`;
+    elements.esp32Metric.textContent = esp32.online ? "online" : "offline";
+    elements.modeBadge.textContent = `Mode: ${control.mode || "manual"}`;
+    elements.mainEsp32Metric.textContent = esp32.online ? "online" : "offline";
+    elements.mainEsp32Detail.textContent = esp32.online
+      ? `${esp32.base_url || "-"} | ${esp32.firmware_mode || "-"}`
+      : esp32.last_error || "javob yo'q";
+    elements.mainMotionMetric.textContent = control.last_command || "stop";
+    elements.mainModeMetric.textContent = `Mode: ${control.mode || "manual"} | ESP ${esp32.firmware_mode || "-"}`;
+    elements.autoSprayMetric.textContent = control.auto_spray ? "ON" : "OFF";
+    elements.lastSprayMetric.textContent = `${spray.last_pump || "-"} | ${spray.last_trigger_at || "-"}`;
+    elements.motionBadge.textContent = `Harakat: ${control.last_command || "stop"}`;
 
-    if (state.availableCameras.has("left")) {
-      setBadge(elements.leftCameraBadge, snapshot.cameras.left?.online, "online", "offline");
-      elements.leftCameraMeta.textContent = cameraMeta(snapshot.cameras.left, "Chap kamera");
-    }
-    if (state.availableCameras.has("front")) {
-      setBadge(elements.frontCameraBadge, snapshot.cameras.front?.online, "online", "offline");
-      elements.frontCameraMeta.textContent = cameraMeta(snapshot.cameras.front, "Old kamera");
-    }
-    if (state.availableCameras.has("right")) {
-      setBadge(elements.rightCameraBadge, snapshot.cameras.right?.online, "online", "offline");
-      elements.rightCameraMeta.textContent = cameraMeta(snapshot.cameras.right, "O'ng kamera");
-    }
+    CAMERA_NAMES.forEach((name) => {
+      if (!state.availableCameras.has(name)) return;
+      setBadge(elements[`${name}CameraBadge`], cameras[name]?.online, "online", "offline");
+      elements[`${name}CameraMeta`].textContent = cameraMeta(cameras[name], `${name} kamera`);
+    });
+
+    renderPumpStates(snapshot.pumps || {});
 
     elements.warningsList.innerHTML = listToHtml(
-      snapshot.warnings.length ? snapshot.warnings : ["Ogohlantirish yo'q"]
+      snapshot.warnings?.length ? snapshot.warnings : ["Ogohlantirish yo'q"]
     );
 
     elements.diagEsp32.innerHTML = `
-      <p>Base URL: ${esp32.base_url}</p>
-      <p>Firmware: ${esp32.firmware_mode}</p>
-      <p>Auto spray: ${control.auto_spray ? "yoqilgan" : "o'chirilgan"}</p>
-      <p>Oxirgi spray: ${spray.last_pump || "-"} | ${spray.last_camera || "-"} | ${spray.last_trigger_at || "-"}</p>
+      <p>Base URL: ${esp32.base_url || "-"}</p>
+      <p>Firmware: ${esp32.firmware_mode || "-"}</p>
+      <p>Chel usti track zaxirasi: ${measurements.lane_margin_cm ?? "-"} sm</p>
+      <p>Spray count: ${spray.trigger_count || 0}</p>
     `;
 
     elements.autoSprayToggle.checked = Boolean(control.auto_spray);
@@ -352,10 +408,12 @@ async function refreshState() {
     elements.speedSlider.value = String(state.speedLimit);
     renderSpeed();
   } catch (error) {
-    elements.esp32Badge.textContent = `Serverga ulanib bo'lmadi: ${error}`;
+    elements.esp32Badge.textContent = `Server xato: ${error}`;
+    elements.esp32Metric.textContent = "server xato";
   }
 }
 
 renderSpeed();
+setPage(location.hash === "#diagnostics" ? "diagnostics" : "operator");
 loadConfig().finally(refreshState);
 setInterval(refreshState, 1000);

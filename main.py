@@ -44,6 +44,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Used with doctor mode to skip live ESP32 connectivity checks.",
     )
+    parser.add_argument(
+        "--demo-cameras",
+        action="store_true",
+        help="Used with serve mode to show safe generated demo camera streams instead of real cameras.",
+    )
     return parser
 
 
@@ -56,6 +61,11 @@ def main() -> None:
         settings.server.host = args.host
     if args.port:
         settings.server.port = args.port
+    if args.demo_cameras:
+        settings.auto_spray.default_enabled = False
+        for camera in settings.cameras:
+            camera.source = f"demo:{camera.name}"
+            camera.detect_flowers = False
 
     if args.mode == "vision-demo":
         run_legacy_dual_camera_demo(settings)

@@ -29,12 +29,17 @@ class RobotStateStore:
                 "last_error": None,
                 "last_ok_at": None,
             },
-            "pumps": {"left": False, "right": False},
+            "pumps": {"left": False, "front": False, "right": False},
             "spray": {
                 "last_camera": None,
                 "last_pump": None,
                 "last_trigger_at": None,
                 "trigger_count": 0,
+                "zones": {
+                    "left": {"trigger_count": 0, "last_trigger_at": None},
+                    "front": {"trigger_count": 0, "last_trigger_at": None},
+                    "right": {"trigger_count": 0, "last_trigger_at": None},
+                },
             },
             "autonomy": {
                 "running": False,
@@ -117,17 +122,31 @@ class RobotStateStore:
         warnings: list[str] = []
         if margin <= 2.5:
             warnings.append(
-                "Qator oralig'i juda tor: har tomonda taxminan 2-2.5 smgina zaxira bor."
+                "Chel ustidagi yurish track'i juda tor: har tomonda taxminan 2-2.5 smgina zaxira bor."
             )
         elif margin <= 5:
             warnings.append(
-                "Avtonom yurish uchun yon sensor bilan markazda ushlash tavsiya qilinadi."
+                "Chel ustida avtonom yurish uchun chel markazini sensor/vision bilan ushlash tavsiya qilinadi."
             )
 
         if self._settings.esp32.firmware_mode == "legacy":
             warnings.append(
                 "ESP32 legacy rejimida: dinamik chap/o'ng PWM uchun advanced firmware tavsiya qilinadi."
             )
+
+        for camera_name, pump_name in self._settings.auto_spray.camera_to_pump.items():
+            if pump_name not in snap["pumps"]:
+                warnings.append(
+                    f"Spray mapping xato: {camera_name} kamera '{pump_name}' kanaliga ulangan, lekin bunday kanal yo'q."
+                )
+
+        offline_cameras = [
+            name
+            for name, camera in snap["cameras"].items()
+            if not camera.get("online")
+        ]
+        if offline_cameras:
+            warnings.append("Offline kamera: " + ", ".join(sorted(offline_cameras)))
 
         if snap["autonomy"]["running"]:
             warnings.extend(snap["autonomy"].get("warnings", []))
