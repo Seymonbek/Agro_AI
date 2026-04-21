@@ -25,10 +25,6 @@ const elements = {
   speedSlider: document.getElementById("speedSlider"),
   stopButton: document.getElementById("stopButton"),
   autoSprayToggle: document.getElementById("autoSprayToggle"),
-  mainEsp32Metric: document.getElementById("mainEsp32Metric"),
-  mainEsp32Detail: document.getElementById("mainEsp32Detail"),
-  mainMotionMetric: document.getElementById("mainMotionMetric"),
-  mainModeMetric: document.getElementById("mainModeMetric"),
   turnLeftButton: document.getElementById("turnLeftButton"),
   turnRightButton: document.getElementById("turnRightButton"),
   forwardButton: document.getElementById("forwardButton"),
@@ -374,12 +370,6 @@ async function refreshState() {
     );
     elements.esp32Metric.textContent = esp32.online ? "online" : "offline";
     elements.modeBadge.textContent = `Mode: ${control.mode || "manual"}`;
-    elements.mainEsp32Metric.textContent = esp32.online ? "online" : "offline";
-    elements.mainEsp32Detail.textContent = esp32.online
-      ? `${esp32.base_url || "-"} | ${esp32.firmware_mode || "-"}`
-      : esp32.last_error || "javob yo'q";
-    elements.mainMotionMetric.textContent = control.last_command || "stop";
-    elements.mainModeMetric.textContent = `Mode: ${control.mode || "manual"} | ESP ${esp32.firmware_mode || "-"}`;
     elements.autoSprayMetric.textContent = control.auto_spray ? "ON" : "OFF";
     elements.lastSprayMetric.textContent = `${spray.last_pump || "-"} | ${spray.last_trigger_at || "-"}`;
     elements.motionBadge.textContent = `Harakat: ${control.last_command || "stop"}`;

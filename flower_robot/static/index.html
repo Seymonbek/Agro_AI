@@ -9,145 +9,81 @@
   <body>
     <div class="rotate-overlay" id="rotateOverlay">
       <div class="rotate-card">
-        <p class="mini-label">Operator rejimi</p>
+        <p class="mini-label">Operator</p>
         <h1>Telefonni yonboshlating</h1>
-        <p>
-          Telefon pulti landscape holatga moslangan. Kompyuterda esa dashboard to'liq
-          ochiladi.
-        </p>
       </div>
     </div>
 
     <div class="app-shell">
-      <header class="hero-bar">
-        <div>
-          <p class="mini-label">Agro AI soft console</p>
-          <h1>Flower Rover Control Center</h1>
-          <p class="hero-copy">
-            Chel ustidan yurish, 3 kamera flower detection, 3 zona smart spray va
-            real-time diagnostics.
-          </p>
-        </div>
-        <div class="hero-side">
-          <div class="hero-status">
-            <span class="status-pill" id="esp32Badge">ESP32: tekshirilmoqda...</span>
-            <span class="status-pill" id="motionBadge">Harakat: stop</span>
-            <span class="status-pill" id="modeBadge">Mode: manual</span>
-          </div>
-          <nav class="page-tabs" aria-label="Console sahifalari">
-            <button class="page-tab active-tab" id="operatorPageButton" type="button">
-              Operator
-            </button>
-            <button class="page-tab" id="diagnosticsPageButton" type="button">
-              Diagnostika
-            </button>
-          </nav>
-        </div>
+      <header class="top-bar">
+        <nav class="page-tabs" aria-label="Sahifalar">
+          <button class="page-tab active-tab" id="operatorPageButton" type="button">
+            Operator
+          </button>
+          <button class="page-tab" id="diagnosticsPageButton" type="button">
+            Ma'lumotlar
+          </button>
+        </nav>
       </header>
 
       <main class="page-stack">
         <section class="app-page operator-page active-page" id="operatorPage">
-          <section class="control-panel panel" aria-label="Manual control">
-            <div class="panel-head">
-              <p class="mini-label">Manual control</p>
-              <h2>Operator pulti</h2>
-            </div>
-
-            <div class="drive-layout">
-              <div class="drive-stack">
-                <button class="drive-button turn" id="turnLeftButton" type="button">Chapga</button>
-                <button class="drive-button turn" id="turnRightButton" type="button">O'ngga</button>
-              </div>
-              <div class="drive-stack">
-                <button class="drive-button forward" id="forwardButton" type="button">Oldinga</button>
-                <button class="drive-button backward" id="backwardButton" type="button">Orqaga</button>
-              </div>
-            </div>
+          <section class="drive-column turn-column" aria-label="Burilish tugmalari">
+            <button class="drive-button turn" id="turnLeftButton" type="button">Chapga</button>
+            <button class="drive-button turn" id="turnRightButton" type="button">O'ngga</button>
           </section>
 
           <section class="camera-panel" aria-label="Kamera oqimlari">
             <article class="camera-card" data-camera-card="left">
               <div class="camera-head">
-                <div>
-                  <p class="mini-label">Left detection</p>
-                  <h2>Chap kamera</h2>
-                </div>
+                <h2>Chap kamera</h2>
                 <span id="leftCameraBadge" class="camera-badge">offline</span>
               </div>
               <img id="leftCameraStream" data-stream="/stream/left" alt="Chap kamera oqimi" />
               <p class="camera-meta" id="leftCameraMeta">Kutilmoqda...</p>
             </article>
 
-            <article class="camera-card main-camera" data-camera-card="front">
-              <div class="camera-head">
-                <div>
-                  <p class="mini-label">Front detection + chel view</p>
-                  <h2>Old kamera</h2>
-                </div>
-                <span id="frontCameraBadge" class="camera-badge">offline</span>
-              </div>
-              <img id="frontCameraStream" data-stream="/stream/front" alt="Old kamera oqimi" />
-              <p class="camera-meta" id="frontCameraMeta">Kutilmoqda...</p>
-            </article>
-
             <article class="camera-card" data-camera-card="right">
               <div class="camera-head">
-                <div>
-                  <p class="mini-label">Right detection</p>
-                  <h2>O'ng kamera</h2>
-                </div>
+                <h2>O'ng kamera</h2>
                 <span id="rightCameraBadge" class="camera-badge">offline</span>
               </div>
               <img id="rightCameraStream" data-stream="/stream/right" alt="O'ng kamera oqimi" />
               <p class="camera-meta" id="rightCameraMeta">Kutilmoqda...</p>
             </article>
+
+            <article class="camera-card" data-camera-card="front">
+              <div class="camera-head">
+                <h2>Old kamera</h2>
+                <span id="frontCameraBadge" class="camera-badge">offline</span>
+              </div>
+              <img id="frontCameraStream" data-stream="/stream/front" alt="Old kamera oqimi" />
+              <p class="camera-meta" id="frontCameraMeta">Kutilmoqda...</p>
+            </article>
           </section>
 
-          <aside class="operator-info-panel panel">
-            <div class="panel-head">
-              <p class="mini-label">Live status</p>
-              <h2>Tezlik va ESP</h2>
-            </div>
+          <section class="speed-box" aria-label="Tezlik boshqaruvi">
+            <strong>Tezlik: <span id="speedValue">120</span> / 255</strong>
+            <input id="speedSlider" type="range" min="0" max="255" value="120" />
+          </section>
 
-            <div class="operator-status-grid">
-              <article class="live-status-card">
-                <p class="mini-label">ESP32</p>
-                <strong id="mainEsp32Metric">offline</strong>
-                <small id="mainEsp32Detail">Aloqa kutilmoqda...</small>
-              </article>
-              <article class="live-status-card">
-                <p class="mini-label">Harakat</p>
-                <strong id="mainMotionMetric">stop</strong>
-                <small id="mainModeMetric">manual</small>
-              </article>
-            </div>
-
-            <div class="speed-box">
-              <div>
-                <p class="mini-label">Tezlik</p>
-                <strong><span id="speedValue">120</span> / 255</strong>
-              </div>
-              <input id="speedSlider" type="range" min="0" max="255" value="120" />
-            </div>
-
-            <div class="action-grid">
-              <button class="stop-button" id="stopButton" type="button">Emergency Stop</button>
-              <label class="toggle-card" for="autoSprayToggle">
-                <span>
-                  <strong>Auto spray</strong>
-                  <small>3 kamera markazga tushgan gulni sepadigan rejim</small>
-                </span>
-                <input id="autoSprayToggle" type="checkbox" />
-              </label>
-            </div>
-          </aside>
+          <section class="drive-column move-column" aria-label="Oldinga va orqaga tugmalari">
+            <button class="drive-button forward" id="forwardButton" type="button">Oldinga</button>
+            <button class="drive-button backward" id="backwardButton" type="button">Orqaga</button>
+          </section>
         </section>
 
         <section class="app-page diagnostics-page" id="diagnosticsPage" hidden>
           <aside class="diagnostics-panel panel">
             <div class="panel-head">
-              <p class="mini-label">Diagnostics</p>
+              <p class="mini-label">Ma'lumotlar</p>
               <h2>Tizim holati</h2>
+            </div>
+
+            <div class="status-grid">
+              <span class="status-pill" id="esp32Badge">ESP32: tekshirilmoqda...</span>
+              <span class="status-pill" id="motionBadge">Harakat: stop</span>
+              <span class="status-pill" id="modeBadge">Mode: manual</span>
             </div>
 
             <div class="metric-list">
@@ -167,6 +103,17 @@
                 <span>Oxirgi spray</span>
                 <strong id="lastSprayMetric">--</strong>
               </div>
+            </div>
+
+            <div class="action-grid">
+              <button class="stop-button" id="stopButton" type="button">Emergency Stop</button>
+              <label class="toggle-card" for="autoSprayToggle">
+                <span>
+                  <strong>Auto spray</strong>
+                  <small>3 kamera markazga tushgan gulni sepadigan rejim</small>
+                </span>
+                <input id="autoSprayToggle" type="checkbox" />
+              </label>
             </div>
 
             <div class="spray-zone-grid">
