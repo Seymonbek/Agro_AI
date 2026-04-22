@@ -6,3 +6,4 @@ requests==2.33.1
 Jinja2==3.1.6
 ultralytics==8.4.38
 pyinstaller
+pyserial

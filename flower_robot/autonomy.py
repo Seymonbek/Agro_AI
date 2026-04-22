@@ -52,10 +52,6 @@ def build_mission_plan(payload: dict[str, Any], measurements: MeasurementsConfig
     warnings: list[str] = [
         "Metr asosidagi avtonom rejim encoder yoki kalibrlashsiz taxminiy ishlaydi."
     ]
-    if measurements.lane_margin_cm <= 2.5:
-        warnings.append(
-            "Chel ustidagi yurish track'i tor: markazdan siljish uchun joy juda kam."
-        )
 
     plan_segments: list[MissionSegment] = []
     for index, raw in enumerate(raw_segments, start=1):
@@ -103,20 +99,37 @@ class MissionController:
         self._plan: MissionPlan | None = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._generation = 0
 
     @property
     def current_plan(self) -> MissionPlan | None:
         return self._plan
 
     def start(self, plan: MissionPlan) -> None:
-        self.stop("new plan queued")
-        self._plan = plan
-        self._stop_event.clear()
-        self._thread = threading.Thread(target=self._run_plan, daemon=True)
+        with self._lock:
+            self._generation += 1
+            self._stop_event.set()
+        self._client.stop()
+
+        with self._lock:
+            self._generation += 1
+            self._plan = plan
+            self._stop_event = threading.Event()
+            generation = self._generation
+            stop_event = self._stop_event
+
+        self._thread = threading.Thread(
+            target=self._run_plan,
+            args=(plan, stop_event, generation),
+            daemon=True,
+        )
         self._thread.start()
 
     def stop(self, reason: str = "stopped") -> None:
-        self._stop_event.set()
+        with self._lock:
+            self._generation += 1
+            self._stop_event.set()
         self._client.stop()
         self._state.update_autonomy(
             running=False,
@@ -125,26 +138,32 @@ class MissionController:
             remaining_seconds=0.0,
         )
 
-    def _run_plan(self) -> None:
-        if self._plan is None:
-            return
+    def _is_current(self, generation: int) -> bool:
+        with self._lock:
+            return generation == self._generation
 
-        total_seconds = max(self._plan.total_seconds, 0.1)
+    def _run_plan(
+        self,
+        plan: MissionPlan,
+        stop_event: threading.Event,
+        generation: int,
+    ) -> None:
+        total_seconds = max(plan.total_seconds, 0.1)
         elapsed_before_segment = 0.0
         self._state.update_autonomy(
             running=True,
             status="running",
-            plan_name=self._plan.name,
+            plan_name=plan.name,
             current_segment=0,
             current_label="",
             progress=0.0,
             remaining_seconds=total_seconds,
-            warnings=self._plan.warnings,
+            warnings=plan.warnings,
         )
 
         completed = True
-        for index, segment in enumerate(self._plan.segments, start=1):
-            if self._stop_event.is_set():
+        for index, segment in enumerate(plan.segments, start=1):
+            if stop_event.is_set() or not self._is_current(generation):
                 completed = False
                 break
 
@@ -156,9 +175,9 @@ class MissionController:
             if segment.pump:
                 self._client.set_pump(segment.pump, True)
 
-            self._client.drive_tank(segment.left, segment.right, self._plan.speed_limit)
+            self._client.drive_tank(segment.left, segment.right, plan.speed_limit)
             started_at = time.monotonic()
-            while not self._stop_event.is_set():
+            while not stop_event.is_set() and self._is_current(generation):
                 elapsed = time.monotonic() - started_at
                 if elapsed >= segment.duration_seconds:
                     break
@@ -169,16 +188,20 @@ class MissionController:
                 )
                 time.sleep(0.1)
 
-            if segment.pump:
+            if segment.pump and self._is_current(generation):
                 self._client.set_pump(segment.pump, False)
 
             elapsed_before_segment += segment.duration_seconds
-            self._client.stop()
+            if self._is_current(generation):
+                self._client.stop()
+
+        if not self._is_current(generation):
+            return
 
         self._client.stop()
         self._state.update_autonomy(
             running=False,
-            status="completed" if completed and not self._stop_event.is_set() else "manual override",
+            status="completed" if completed and not stop_event.is_set() else "manual override",
             progress=1.0 if completed else self._state.snapshot()["autonomy"]["progress"],
             current_label="",
             remaining_seconds=0.0,

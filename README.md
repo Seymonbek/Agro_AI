@@ -4,6 +4,7 @@ Bu loyiha laptopni robotning "miya" qatlami sifatida ishlatadi:
 
 - `ESP32` motor va nasoslarni bajaradi.
 - `Python server` telefon uchun local web app, kameralar, telemetriya va keyingi avtonomni boshqaradi.
+- `USB Serial` notebook va ESP32 orasidagi asosiy aloqa yo'li bo'ladi.
 - `YOLOWorld` old/chap/o'ng kamerada gullarni aniqlaydi.
 - `Auto spray` yoqilganda har bir kamerada gul markazga tushsa mos spray kanalga pulse yuboradi.
 - `Old kamera` endi ikki vazifani bajaradi: yo'lni ko'rsatadi va old spray zonasini trigger qiladi.
@@ -12,28 +13,21 @@ Bu loyiha laptopni robotning "miya" qatlami sifatida ishlatadi:
 
 Bu yerda "server ko'tarish" degani cloud emas. Shu laptopning o'zida local HTTP server ishga tushadi, telefon esa shu Wi-Fi ichida brauzer orqali ulanadi.
 
-## Muhim geometriya
+## Geometriya Eslatmasi
 
-Robot endi ikkita chel orasidan emas, chelning ustidan yuradigan konseptga moslangan.
+Robot hozir chel ustidan yuradigan konseptga moslangan. `config.json` ichidagi
+`lane_width_cm` nomi eski compatibility uchun qoldirilgan reference o'lchov.
+Real yurish xavfsizligi hardware geometriyasi, g'ildirak joylashuvi va amaliy
+kalibrovkaga bog'liq.
 
-`config.json` ichidagi `lane_width_cm` nomi compatibility uchun qoldirilgan, lekin bu loyihada uning ma'nosi:
-
-```text
-chel ustida robot xavfsiz bosib yuradigan track kengligi
-```
-
-Shu sababli oddiy "7 metr oldinga yur" avtonomi chel ustida ham xavfli. Amaliy tavsiya:
-
-1. Front kamera bilan chel markazini ko'ring.
-2. G'ildirakka encoder qo'ying.
-3. IMU qo'ying.
-4. Avtonomda harakatni "meter only" emas, "chel center tracking + encoder distance" qiling.
+Aniq avtonom yurish kerak bo'lsa keyingi bosqichda encoder, IMU yoki front vision
+feedback qo'shish mumkin.
 
 ## Ishga tushirish
 
 1. `config.example.json` ni `config.json` ga ko'chiring.
-2. Ichidagi `esp32.base_url` va kamera indekslarini moslang.
-3. Auto spray ishlashi uchun ESP32 ga [robot_controller_example.ino](/home/seymonbek/Flowers/esp32/robot_controller_example.ino) dagi `advanced` endpointlarni yozing.
+2. Ichidagi `esp32.serial_port` va kamera indekslarini moslang.
+3. ESP32 ga [robot_controller_example.ino](/home/seymonbek/Flowers/esp32/robot_controller_example.ino) ni yozing.
 4. Virtual muhitdan:
 
 ```bash
@@ -45,6 +39,47 @@ So'ng telefon brauzerida:
 ```text
 http://LAPTOP_IP:8765
 ```
+
+## ESP32 USB Serial Rejimi
+
+Default config endi Wi-Fi o'rniga USB Serial ishlatadi:
+
+```json
+{
+  "esp32": {
+    "transport": "serial",
+    "serial_port": "auto",
+    "baudrate": 115200
+  }
+}
+```
+
+ESP32 portini tekshirish:
+
+```bash
+ls /dev/ttyUSB* /dev/ttyACM*
+```
+
+`serial_port: "auto"` bo'lsa server `/dev/serial/by-id/*`, `/dev/ttyACM*` va
+`/dev/ttyUSB*` portlardan birini avtomatik tanlaydi. Agar bir nechta qurilma
+ulangan bo'lsa, `config.json` ichida portni aniq yozing. Windowsda bu odatda
+`COM3`, `COM4` kabi bo'ladi.
+
+Firmware ichida `ENABLE_WIFI_AP = false`, shuning uchun ESP32 Wi-Fi AP ko'tarmaydi
+va notebook bilan USB orqali gaplashadi. Agar eski Wi-Fi HTTP rejim kerak bo'lsa,
+firmware'da `ENABLE_WIFI_AP = true`, configda esa `transport: "http"` qiling.
+
+## Telefon Home Screen Ilova Rejimi
+
+APK build qilmasdan ham telefon ekranida ilovadek ochish mumkin:
+
+1. Laptopda serverni ishga tushiring.
+2. Telefon va laptop bir xil Wi-Fi tarmoqda bo'lsin.
+3. Telefon brauzerida `http://LAPTOP_IP:8765` ni oching.
+4. Chrome menyusidan `Add to Home screen` yoki `Install app` ni bosing.
+5. Keyingi safar `Flower Rover` ikonkasidan oching.
+
+Eslatma: true APK qilish ham mumkin, lekin u Android Studio/Android SDK bilan alohida build qilinadi. Bu loyiha hozir PWA/shortcut rejimiga tayyor.
 
 Faqat web app/pult/dashboardni kamera ulanmagan holda ko'rib chiqmoqchi bo'lsangiz:
 

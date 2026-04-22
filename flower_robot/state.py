@@ -24,7 +24,9 @@ class RobotStateStore:
             },
             "esp32": {
                 "online": False,
+                "transport": settings.esp32.transport,
                 "base_url": settings.esp32.base_url,
+                "serial_port": settings.esp32.serial_port,
                 "firmware_mode": settings.esp32.firmware_mode,
                 "last_error": None,
                 "last_ok_at": None,
@@ -118,17 +120,7 @@ class RobotStateStore:
         return snap
 
     def _build_warnings(self, snap: dict[str, Any]) -> list[str]:
-        margin = self._settings.measurements.lane_margin_cm
         warnings: list[str] = []
-        if margin <= 2.5:
-            warnings.append(
-                "Chel ustidagi yurish track'i juda tor: har tomonda taxminan 2-2.5 smgina zaxira bor."
-            )
-        elif margin <= 5:
-            warnings.append(
-                "Chel ustida avtonom yurish uchun chel markazini sensor/vision bilan ushlash tavsiya qilinadi."
-            )
-
         if self._settings.esp32.firmware_mode == "legacy":
             warnings.append(
                 "ESP32 legacy rejimida: dinamik chap/o'ng PWM uchun advanced firmware tavsiya qilinadi."

@@ -35,6 +35,9 @@
 // Laptop shu Wi-Fi ga ulanadi va ESP32 bilan gaplashadi.
 // Demak ESP32 o'zi modem vazifasini bajaradi.
 // =========================================================
+// USB serial ishlatilsa false qiling. Bu ESP32 qizishini kamaytiradi.
+// Wi-Fi HTTP fallback kerak bo'lsa true qiling.
+const bool ENABLE_WIFI_AP = false;
 const char *AP_SSID = "123";
 const char *AP_PASSWORD = "12345678";
 const uint8_t AP_CHANNEL = 6;
@@ -234,6 +237,10 @@ String buildStatusJson() {
   String json = "{";
   json += "\"ok\":true,";
   json += "\"mode\":\"advanced\",";
+  json += "\"transport\":\"serial-http\",";
+  json += "\"wifiAp\":";
+  json += (ENABLE_WIFI_AP ? "true" : "false");
+  json += ",";
   json += "\"ip\":\"" + WiFi.softAPIP().toString() + "\",";
   json += "\"ssid\":\"" + String(AP_SSID) + "\",";
   json += "\"speedLimit\":" + String(speedLimit) + ",";
@@ -383,10 +390,136 @@ void handleNotFound() {
 }
 
 // =========================================================
+// USB SERIAL API
+// Notebook miya bo'lganda Python server ESP32 bilan shu buyruqlar orqali gaplashadi.
+//
+// STATUS
+// SPEED 180
+// DRIVE 0.700 0.700 180
+// PUMP left on
+// PUMP front off
+// STOP
+// =========================================================
+String tokenAt(String text, int tokenIndex) {
+  text.trim();
+  int start = 0;
+  int currentIndex = 0;
+
+  while (start < text.length()) {
+    while (start < text.length() && text.charAt(start) == ' ') {
+      start++;
+    }
+    if (start >= text.length()) {
+      break;
+    }
+
+    int end = text.indexOf(' ', start);
+    if (end < 0) {
+      end = text.length();
+    }
+
+    if (currentIndex == tokenIndex) {
+      return text.substring(start, end);
+    }
+
+    currentIndex++;
+    start = end + 1;
+  }
+
+  return "";
+}
+
+void sendSerialStatus() {
+  Serial.println(buildStatusJson());
+}
+
+void sendSerialError(const String &errorCode) {
+  Serial.print("{\"ok\":false,\"error\":\"");
+  Serial.print(errorCode);
+  Serial.println("\"}");
+}
+
+void handleSerialCommand(String line) {
+  line.trim();
+  if (line.length() == 0) {
+    return;
+  }
+
+  String command = tokenAt(line, 0);
+  command.toUpperCase();
+
+  if (command == "STATUS" || command == "PING") {
+    sendSerialStatus();
+    return;
+  }
+
+  if (command == "SPEED") {
+    String value = tokenAt(line, 1);
+    if (value.length() == 0) {
+      sendSerialError("missing_speed");
+      return;
+    }
+    speedLimit = constrain(value.toInt(), 0, 255);
+    sendSerialStatus();
+    return;
+  }
+
+  if (command == "DRIVE") {
+    String leftToken = tokenAt(line, 1);
+    String rightToken = tokenAt(line, 2);
+    String speedToken = tokenAt(line, 3);
+    if (leftToken.length() == 0 || rightToken.length() == 0) {
+      sendSerialError("missing_drive_values");
+      return;
+    }
+    if (speedToken.length() > 0) {
+      speedLimit = constrain(speedToken.toInt(), 0, 255);
+    }
+    applyTankDrive(leftToken.toFloat(), rightToken.toFloat());
+    sendSerialStatus();
+    return;
+  }
+
+  if (command == "PUMP") {
+    String side = tokenAt(line, 1);
+    String state = tokenAt(line, 2);
+    state.toLowerCase();
+    if (side != "left" && side != "front" && side != "right") {
+      sendSerialError("invalid_pump_side");
+      return;
+    }
+    if (state != "on" && state != "off") {
+      sendSerialError("invalid_pump_state");
+      return;
+    }
+    setPumpState(side, state == "on");
+    sendSerialStatus();
+    return;
+  }
+
+  if (command == "STOP") {
+    stopMotors();
+    disableAllPumps();
+    sendSerialStatus();
+    return;
+  }
+
+  sendSerialError("unknown_command");
+}
+
+void handleSerialCommands() {
+  while (Serial.available() > 0) {
+    String line = Serial.readStringUntil('\n');
+    handleSerialCommand(line);
+  }
+}
+
+// =========================================================
 // SETUP
 // =========================================================
 void setup() {
   Serial.begin(115200);
+  Serial.setTimeout(20);
 
   // Motor pinlarini chiqish rejimiga o'tkazish
   pinMode(LEFT_RPWM, OUTPUT);
@@ -412,40 +545,47 @@ void setup() {
   lastDriveCommandMs = millis();
   lastRampUpdateMs = millis();
 
-  // ESP32 o'zi Wi-Fi nuqta bo'ladi
-  bool apOk = startAccessPoint();
+  bool apOk = false;
+  if (ENABLE_WIFI_AP) {
+    // ESP32 o'zi Wi-Fi nuqta bo'ladi
+    apOk = startAccessPoint();
 
-  // Asosiy web sahifa
-  server.on("/", handleRoot);
+    // Asosiy web sahifa
+    server.on("/", handleRoot);
 
-  // Advanced API - laptop server shu bilan ishlaydi
-  server.on("/api/status", handleApiStatus);
-  server.on("/api/speed", handleApiSpeed);
-  server.on("/api/drive", handleApiDrive);
-  server.on("/api/pump", handleApiPump);
-  server.on("/api/stop", handleApiStop);
+    // Advanced API - laptop server shu bilan ishlaydi
+    server.on("/api/status", handleApiStatus);
+    server.on("/api/speed", handleApiSpeed);
+    server.on("/api/drive", handleApiDrive);
+    server.on("/api/pump", handleApiPump);
+    server.on("/api/stop", handleApiStop);
 
-  // Legacy API - qo'lda browser test uchun
-  server.on("/F", handleForward);
-  server.on("/B", handleBackward);
-  server.on("/L", handleLeft);
-  server.on("/R", handleRight);
-  server.on("/S", handleStopLegacy);
+    // Legacy API - qo'lda browser test uchun
+    server.on("/F", handleForward);
+    server.on("/B", handleBackward);
+    server.on("/L", handleLeft);
+    server.on("/R", handleRight);
+    server.on("/S", handleStopLegacy);
 
-  server.onNotFound(handleNotFound);
-  server.begin();
+    server.onNotFound(handleNotFound);
+    server.begin();
+  } else {
+    WiFi.mode(WIFI_OFF);
+  }
 
   // Serial monitor ga kerakli ma'lumotlarni chiqarish
   Serial.println("====================================");
   Serial.println("Flower Rover ESP32 ready");
-  Serial.print("SSID: ");
-  Serial.println(AP_SSID);
-  Serial.print("Password: ");
-  Serial.println(AP_PASSWORD);
+  Serial.print("Transport: ");
+  Serial.println(ENABLE_WIFI_AP ? "USB Serial + Wi-Fi HTTP" : "USB Serial only");
   Serial.print("AP started: ");
   Serial.println(apOk ? "YES" : "NO");
-  Serial.print("AP IP: ");
-  Serial.println(WiFi.softAPIP());
+  if (ENABLE_WIFI_AP) {
+    Serial.print("SSID: ");
+    Serial.println(AP_SSID);
+    Serial.print("AP IP: ");
+    Serial.println(WiFi.softAPIP());
+  }
   Serial.println("====================================");
 }
 
@@ -453,15 +593,19 @@ void setup() {
 // LOOP
 // =========================================================
 void loop() {
-  // Har bir kelgan HTTP so'rovni qabul qiladi
-  server.handleClient();
+  handleSerialCommands();
 
-  // Wi-Fi AP tushib qolsa qayta ko'taramiz.
-  if (millis() - lastApHealthcheckMs > AP_HEALTHCHECK_MS) {
-    lastApHealthcheckMs = millis();
-    if (WiFi.getMode() != WIFI_AP || WiFi.softAPIP()[0] == 0) {
-      Serial.println("Wi-Fi AP qayta ishga tushirilmoqda...");
-      startAccessPoint();
+  if (ENABLE_WIFI_AP) {
+    // Har bir kelgan HTTP so'rovni qabul qiladi
+    server.handleClient();
+
+    // Wi-Fi AP tushib qolsa qayta ko'taramiz.
+    if (millis() - lastApHealthcheckMs > AP_HEALTHCHECK_MS) {
+      lastApHealthcheckMs = millis();
+      if (WiFi.getMode() != WIFI_AP || WiFi.softAPIP()[0] == 0) {
+        Serial.println("Wi-Fi AP qayta ishga tushirilmoqda...");
+        startAccessPoint();
+      }
     }
   }
 

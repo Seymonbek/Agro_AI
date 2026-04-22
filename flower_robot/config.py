@@ -16,9 +16,14 @@ class ServerConfig:
 
 @dataclass
 class Esp32Config:
+    transport: str = "serial"
     base_url: str = "http://192.168.4.1"
     timeout_sec: float = 1.2
     firmware_mode: str = "legacy"
+    serial_port: str = "auto"
+    baudrate: int = 115200
+    serial_timeout_sec: float = 0.5
+    serial_ready_delay_sec: float = 1.0
 
 
 @dataclass
@@ -38,9 +43,12 @@ class VisionConfig:
     model_path: str = "yolov8s-world.pt"
     confidence: float = 0.3
     imgsz: int = 160
-    detect_every_n_frames: int = 1
-    stream_width: int = 640
-    stream_height: int = 480
+    detect_every_n_frames: int = 3
+    stream_width: int = 480
+    stream_height: int = 360
+    capture_fps: int = 15
+    stale_frame_grabs: int = 2
+    jpeg_quality: int = 72
 
 
 @dataclass
@@ -76,9 +84,14 @@ class AppSettings:
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "0.0.0.0", "port": 8765},
     "esp32": {
+        "transport": "serial",
         "base_url": "http://192.168.4.1",
         "timeout_sec": 1.2,
         "firmware_mode": "advanced",
+        "serial_port": "auto",
+        "baudrate": 115200,
+        "serial_timeout_sec": 0.5,
+        "serial_ready_delay_sec": 1.0,
     },
     "measurements": {
         "lane_width_cm": 70.0,
@@ -90,9 +103,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "model_path": "yolov8s-world.pt",
         "confidence": 0.3,
         "imgsz": 160,
-        "detect_every_n_frames": 1,
-        "stream_width": 640,
-        "stream_height": 480,
+        "detect_every_n_frames": 3,
+        "stream_width": 480,
+        "stream_height": 360,
+        "capture_fps": 15,
+        "stale_frame_grabs": 2,
+        "jpeg_quality": 72,
     },
     "auto_spray": {
         "default_enabled": True,

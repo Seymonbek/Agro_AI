@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,7 @@ import cv2
 
 from flower_robot.config import AppSettings
 from flower_robot.paths import resource_path
+from flower_robot.serial_ports import resolve_serial_port, serial_port_candidates
 
 SPRAY_ZONES = {"left", "front", "right"}
 
@@ -43,6 +45,41 @@ def _http_probe(url: str, timeout: float) -> tuple[bool, str]:
         return True, payload[:140]
     except URLError as exc:
         return False, str(exc)
+    except Exception as exc:  # noqa: BLE001
+        return False, str(exc)
+
+
+def _serial_probe(port: str, baudrate: int, timeout: float) -> tuple[bool, str]:
+    resolved_port = resolve_serial_port(port)
+    if resolved_port is None:
+        candidates = serial_port_candidates()
+        detail = (
+            f"serial_port={port or 'auto'} | kandidatlar: {', '.join(candidates)}"
+            if candidates
+            else f"serial_port={port or 'auto'} | USB serial port topilmadi"
+        )
+        return False, detail
+
+    try:
+        import serial
+    except ImportError:
+        return False, "pyserial o'rnatilmagan"
+
+    try:
+        with serial.Serial(
+            port=resolved_port,
+            baudrate=baudrate,
+            timeout=timeout,
+            write_timeout=timeout,
+        ) as handle:
+            time_to_wait = min(max(timeout, 0.1), 1.0)
+            time.sleep(time_to_wait)
+            handle.reset_input_buffer()
+            handle.write(b"STATUS\n")
+            handle.flush()
+            payload = handle.readline().decode("utf-8", errors="ignore").strip()
+        detail = payload[:140] or "serial javob bo'sh"
+        return bool(payload), f"{resolved_port} | {detail}"
     except Exception as exc:  # noqa: BLE001
         return False, str(exc)
 
@@ -100,12 +137,9 @@ def run_doctor(
     )
     results.append(
         CheckResult(
-            name="geometry-warning",
-            ok=lane_margin > 2.5,
-            detail=f"tor chel usti track: har tomonda {lane_margin:.2f} sm zaxira",
-            fix="Chel ustida avtonom yurish uchun front vision + encoder + IMU tavsiya qilinadi."
-            if lane_margin <= 2.5
-            else None,
+            name="geometry-reference",
+            ok=True,
+            detail=f"reference margin {lane_margin:.2f} cm",
         )
     )
 
@@ -186,17 +220,26 @@ def run_doctor(
             )
         )
     else:
-        status_path = "/api/status" if settings.esp32.firmware_mode == "advanced" else "/"
-        esp_ok, esp_detail = _http_probe(
-            f"{settings.esp32.base_url.rstrip('/')}{status_path}",
-            timeout=settings.esp32.timeout_sec,
-        )
+        if settings.esp32.transport == "serial":
+            esp_ok, esp_detail = _serial_probe(
+                settings.esp32.serial_port,
+                settings.esp32.baudrate,
+                settings.esp32.serial_timeout_sec,
+            )
+            fix = "ESP32 USB kabeli, serial_port va pyserial ni tekshiring."
+        else:
+            status_path = "/api/status" if settings.esp32.firmware_mode == "advanced" else "/"
+            esp_ok, esp_detail = _http_probe(
+                f"{settings.esp32.base_url.rstrip('/')}{status_path}",
+                timeout=settings.esp32.timeout_sec,
+            )
+            fix = "ESP32 power, Wi-Fi va base_url ni tekshiring."
         results.append(
             CheckResult(
                 name="esp32",
                 ok=esp_ok,
                 detail=esp_detail,
-                fix="ESP32 power, Wi-Fi va base_url ni tekshiring." if not esp_ok else None,
+                fix=fix if not esp_ok else None,
             )
         )
 

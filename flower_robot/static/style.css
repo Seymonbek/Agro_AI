@@ -67,8 +67,8 @@ button {
 
 .page-tabs {
   display: inline-grid;
-  grid-template-columns: 1fr 1fr;
-  width: min(300px, 92vw);
+  grid-template-columns: repeat(3, 1fr);
+  width: min(420px, 92vw);
   gap: 5px;
   padding: 4px;
   border: 1px solid var(--line);
@@ -278,6 +278,7 @@ input[type="range"] {
   accent-color: var(--green);
 }
 
+.autonomy-page,
 .diagnostics-page {
   height: 100%;
   overflow: auto;
@@ -294,6 +295,12 @@ input[type="range"] {
 
 .diagnostics-panel {
   width: min(980px, 100%);
+  margin: 0 auto;
+  padding: 18px;
+}
+
+.autonomy-panel {
+  width: min(1120px, 100%);
   margin: 0 auto;
   padding: 18px;
 }
@@ -315,7 +322,9 @@ input[type="range"] {
 .status-grid,
 .metric-list,
 .spray-zone-grid,
-.action-grid {
+.action-grid,
+.mission-actions,
+.autonomy-status-grid {
   display: grid;
   gap: 10px;
   margin-top: 14px;
@@ -354,6 +363,111 @@ input[type="range"] {
 
 .action-grid {
   grid-template-columns: minmax(180px, 0.7fr) 1fr;
+}
+
+.mission-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.mission-form {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+
+.field-group {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.field-group input,
+.field-group textarea {
+  width: 100%;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text);
+  padding: 11px 12px;
+  outline: none;
+}
+
+.field-group input:focus,
+.field-group textarea:focus {
+  border-color: var(--line-strong);
+  box-shadow: 0 0 0 3px rgba(143, 211, 108, 0.14);
+}
+
+.segments-field textarea {
+  min-height: 310px;
+  resize: vertical;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.88rem;
+  line-height: 1.5;
+}
+
+.mission-side {
+  min-width: 0;
+}
+
+.mission-actions {
+  grid-template-columns: repeat(3, 1fr);
+  margin-top: 0;
+}
+
+.primary-action,
+.secondary-action,
+.danger-action {
+  min-height: 48px;
+  border: 0;
+  border-radius: 14px;
+  cursor: pointer;
+  font-weight: 900;
+}
+
+.primary-action {
+  background: linear-gradient(135deg, var(--green), #dcff9e);
+  color: #102015;
+}
+
+.secondary-action {
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.danger-action {
+  background: linear-gradient(135deg, var(--danger), var(--danger-deep));
+  color: #fff;
+}
+
+.autonomy-status-grid {
+  grid-template-columns: 1fr 1fr;
+}
+
+.plan-preview {
+  min-height: 230px;
+  max-height: 390px;
+  overflow: auto;
+  margin: 14px 0 0;
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 16px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--muted);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.48;
+  white-space: pre-wrap;
+}
+
+.plan-preview.error {
+  color: #ffd2ce;
+  border-color: rgba(239, 92, 86, 0.45);
 }
 
 .stop-button {
@@ -531,7 +645,7 @@ input[type="range"] {
   }
 
   .page-tabs {
-    width: 210px;
+    width: 300px;
     padding: 3px;
   }
 
@@ -546,15 +660,124 @@ input[type="range"] {
 
   .status-grid,
   .spray-zone-grid,
-  .action-grid {
+  .action-grid,
+  .mission-layout,
+  .mission-actions,
+  .autonomy-status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .autonomy-panel {
+    padding: 12px;
+  }
+
+  .segments-field textarea {
+    min-height: 220px;
   }
 }
 
 @media (orientation: landscape) and (max-width: 980px) and (max-height: 560px) {
+  .autonomy-page,
   .diagnostics-page {
     padding: 0;
     overflow: hidden;
+  }
+
+  .autonomy-panel {
+    display: grid;
+    grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr);
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 8px;
+    height: 100%;
+    width: 100%;
+    padding: 8px;
+    border-radius: 18px;
+    overflow: hidden;
+  }
+
+  .autonomy-panel .panel-head {
+    grid-column: 1 / -1;
+    grid-row: 1;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+  }
+
+  .autonomy-panel .panel-head h2 {
+    margin: 0;
+    font-size: 0.95rem;
+  }
+
+  .mission-layout {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    grid-template-columns: minmax(0, 1.15fr) minmax(220px, 0.85fr);
+    gap: 8px;
+    min-height: 0;
+    margin-top: 0;
+  }
+
+  .mission-form {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    min-height: 0;
+    gap: 7px;
+  }
+
+  .field-group {
+    gap: 4px;
+    font-size: 0.68rem;
+  }
+
+  .field-group input,
+  .field-group textarea {
+    padding: 7px 8px;
+    border-radius: 12px;
+    font-size: 0.72rem;
+  }
+
+  .segments-field textarea {
+    min-height: 0;
+    height: 100%;
+  }
+
+  .segments-field {
+    min-height: 0;
+  }
+
+  .mission-side {
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    min-height: 0;
+  }
+
+  .mission-actions,
+  .autonomy-status-grid {
+    gap: 6px;
+  }
+
+  .mission-actions {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  .primary-action,
+  .secondary-action,
+  .danger-action {
+    min-height: 34px;
+    border-radius: 11px;
+    font-size: 0.72rem;
+  }
+
+  .autonomy-status-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .plan-preview {
+    min-height: 0;
+    max-height: none;
+    margin-top: 8px;
+    padding: 8px;
+    border-radius: 12px;
+    font-size: 0.66rem;
   }
 
   .diagnostics-panel {

@@ -129,6 +129,19 @@ class DetectionEngine:
         )
 
 
+class NullDetectionEngine:
+    @property
+    def enabled(self) -> bool:
+        return False
+
+    @property
+    def error(self) -> str | None:
+        return None
+
+    def annotate(self, frame: np.ndarray) -> tuple[np.ndarray, DetectionResult]:
+        return frame, DetectionResult(detections=0, last_detection=None, centered_detection=None)
+
+
 class CameraWorker:
     def __init__(
         self,
@@ -161,6 +174,30 @@ class CameraWorker:
     def latest_jpeg(self) -> bytes:
         with self._frame_lock:
             return self._latest_jpeg
+
+    def _open_capture(self) -> cv2.VideoCapture:
+        capture = cv2.VideoCapture(self.camera.source)
+        capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._settings.vision.stream_width)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._settings.vision.stream_height)
+        if self._settings.vision.capture_fps > 0:
+            capture.set(cv2.CAP_PROP_FPS, self._settings.vision.capture_fps)
+        return capture
+
+    def _read_latest_frame(self, capture: cv2.VideoCapture) -> tuple[bool, np.ndarray | None]:
+        grabs = max(int(self._settings.vision.stale_frame_grabs), 0)
+        if grabs <= 0:
+            return capture.read()
+
+        grabbed = False
+        for _ in range(grabs):
+            grabbed = capture.grab()
+            if not grabbed:
+                break
+
+        if grabbed:
+            return capture.retrieve()
+        return capture.read()
 
     def _encode_placeholder(self, title: str, subtitle: str) -> bytes:
         frame = _placeholder_frame(
@@ -218,15 +255,6 @@ class CameraWorker:
             flower_y = int(height * 0.58)
             cv2.circle(frame, (flower_x, flower_y), 34, accent, -1)
             cv2.circle(frame, (flower_x, flower_y), 9, (255, 255, 255), -1)
-            cv2.putText(
-                frame,
-                "DEMO CAMERA - real nasos trigger qilinmaydi",
-                (28, height - 28),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.68,
-                (230, 238, 235),
-                2,
-            )
 
             now = time.monotonic()
             if now - last_fps_tick >= 1.0:
@@ -234,8 +262,11 @@ class CameraWorker:
                 frames_since_tick = 0
                 last_fps_tick = now
 
-            self._draw_overlay(frame, fps)
-            success, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 82])
+            success, encoded = cv2.imencode(
+                ".jpg",
+                frame,
+                [int(cv2.IMWRITE_JPEG_QUALITY), self._settings.vision.jpeg_quality],
+            )
             if success:
                 with self._frame_lock:
                     self._latest_jpeg = encoded.tobytes()
@@ -254,7 +285,7 @@ class CameraWorker:
             self._run_demo()
             return
 
-        capture = cv2.VideoCapture(self.camera.source)
+        capture = self._open_capture()
         last_fps_tick = time.monotonic()
         frames_since_tick = 0
         fps = 0.0
@@ -272,10 +303,10 @@ class CameraWorker:
                     self._latest_jpeg = self._encode_placeholder("Offline", "Port yoki indeksni tekshiring")
                 time.sleep(3.0)
                 capture.release()
-                capture = cv2.VideoCapture(self.camera.source)
+                capture = self._open_capture()
                 continue
 
-            ok, frame = capture.read()
+            ok, frame = self._read_latest_frame(capture)
             if not ok:
                 self._state.update_camera(
                     self.camera.name,
@@ -321,8 +352,11 @@ class CameraWorker:
                 frames_since_tick = 0
                 last_fps_tick = now
 
-            self._draw_overlay(view, fps)
-            success, encoded = cv2.imencode(".jpg", view, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+            success, encoded = cv2.imencode(
+                ".jpg",
+                view,
+                [int(cv2.IMWRITE_JPEG_QUALITY), self._settings.vision.jpeg_quality],
+            )
             if success:
                 with self._frame_lock:
                     self._latest_jpeg = encoded.tobytes()
@@ -338,27 +372,6 @@ class CameraWorker:
 
         capture.release()
 
-    def _draw_overlay(self, frame: np.ndarray, fps: float) -> None:
-        cv2.rectangle(frame, (18, 18), (250, 92), (18, 28, 23), -1)
-        cv2.putText(
-            frame,
-            self.camera.name.upper(),
-            (30, 45),
-            cv2.FONT_HERSHEY_DUPLEX,
-            0.9,
-            (134, 239, 172),
-            2,
-        )
-        cv2.putText(
-            frame,
-            f"{fps:.1f} FPS | det={self._last_detection.detections}",
-            (30, 76),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.55,
-            (241, 245, 249),
-            2,
-        )
-
 
 class VisionHub:
     def __init__(
@@ -369,7 +382,9 @@ class VisionHub:
     ) -> None:
         self._settings = settings
         self._state = state
-        self._detector = DetectionEngine(settings)
+        enabled_cameras = [camera for camera in settings.cameras if camera.enabled]
+        needs_detection = any(camera.detect_flowers for camera in enabled_cameras)
+        self._detector = DetectionEngine(settings) if needs_detection else NullDetectionEngine()
         self._workers = {
             camera.name: CameraWorker(
                 camera,

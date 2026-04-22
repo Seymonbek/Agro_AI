@@ -3,7 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#07100b" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Flower Rover" />
     <title>Flower Rover Operator Console</title>
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" href="/assets/icons/flower-rover-192.png" />
     <link rel="stylesheet" href="/assets/style.css" />
   </head>
   <body>
@@ -19,6 +25,9 @@
         <nav class="page-tabs" aria-label="Sahifalar">
           <button class="page-tab active-tab" id="operatorPageButton" type="button">
             Operator
+          </button>
+          <button class="page-tab" id="autonomyPageButton" type="button">
+            Avtonom
           </button>
           <button class="page-tab" id="diagnosticsPageButton" type="button">
             Ma'lumotlar
@@ -70,6 +79,63 @@
           <section class="drive-column move-column" aria-label="Oldinga va orqaga tugmalari">
             <button class="drive-button forward" id="forwardButton" type="button">Oldinga</button>
             <button class="drive-button backward" id="backwardButton" type="button">Orqaga</button>
+          </section>
+        </section>
+
+        <section class="app-page autonomy-page" id="autonomyPage" hidden>
+          <section class="autonomy-panel panel">
+            <div class="panel-head">
+              <p class="mini-label">Avtonom</p>
+              <h2>Reja boshqaruvi</h2>
+            </div>
+
+            <div class="mission-layout">
+              <form class="mission-form" id="missionForm">
+                <label class="field-group" for="missionName">
+                  <span>Reja nomi</span>
+                  <input id="missionName" type="text" value="Chel usti demo" />
+                </label>
+
+                <label class="field-group" for="missionSpeed">
+                  <span>Tezlik: <strong id="missionSpeedValue">180</strong> / 255</span>
+                  <input id="missionSpeed" type="range" min="0" max="255" value="180" />
+                </label>
+
+                <label class="field-group segments-field" for="missionSegments">
+                  <span>Segmentlar JSON</span>
+                  <textarea id="missionSegments" spellcheck="false"></textarea>
+                </label>
+              </form>
+
+              <section class="mission-side" aria-label="Avtonom reja holati">
+                <div class="mission-actions">
+                  <button class="secondary-action" id="previewPlanButton" type="button">Preview</button>
+                  <button class="primary-action" id="startPlanButton" type="button">Start</button>
+                  <button class="danger-action" id="stopPlanButton" type="button">Stop</button>
+                </div>
+
+                <div class="autonomy-status-grid">
+                  <div class="metric-row">
+                    <span>Status</span>
+                    <strong id="planStatusMetric">idle</strong>
+                  </div>
+                  <div class="metric-row">
+                    <span>Progress</span>
+                    <strong id="planProgressMetric">0%</strong>
+                  </div>
+                  <div class="metric-row">
+                    <span>Qolgan vaqt</span>
+                    <strong id="planRemainingMetric">0.0s</strong>
+                  </div>
+                  <div class="metric-row">
+                    <span>Segment</span>
+                    <strong id="planCurrentMetric">-</strong>
+                  </div>
+                </div>
+
+                <pre class="plan-preview" id="planPreview">Reja kutilmoqda...</pre>
+              </section>
+            </div>
           </section>
         </section>
 

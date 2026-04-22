@@ -1,6 +1,14 @@
 const CAMERA_NAMES = ["left", "front", "right"];
 const SPRAY_ZONES = ["left", "front", "right"];
 
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker.js").catch((error) => {
+      console.warn("Service worker ishlamadi", error);
+    });
+  });
+}
+
 const state = {
   speedLimit: 120,
   activeButtons: new Set(),
@@ -11,6 +19,10 @@ const state = {
 
 const TURN_FACTOR = 0.7;
 const DRIVE_KEEPALIVE_MS = 250;
+const DEFAULT_SEGMENTS = [
+  { label: "Chel ustida oldinga", left: 0.55, right: 0.55, meters: 7.0 },
+  { label: "Joyida burilish", left: -0.45, right: 0.45, seconds: 1.1 },
+];
 let driveHoldTimer = null;
 
 const elements = {
@@ -18,8 +30,10 @@ const elements = {
   motionBadge: document.getElementById("motionBadge"),
   modeBadge: document.getElementById("modeBadge"),
   operatorPage: document.getElementById("operatorPage"),
+  autonomyPage: document.getElementById("autonomyPage"),
   diagnosticsPage: document.getElementById("diagnosticsPage"),
   operatorPageButton: document.getElementById("operatorPageButton"),
+  autonomyPageButton: document.getElementById("autonomyPageButton"),
   diagnosticsPageButton: document.getElementById("diagnosticsPageButton"),
   speedValue: document.getElementById("speedValue"),
   speedSlider: document.getElementById("speedSlider"),
@@ -47,6 +61,19 @@ const elements = {
   leftCameraStream: document.getElementById("leftCameraStream"),
   frontCameraStream: document.getElementById("frontCameraStream"),
   rightCameraStream: document.getElementById("rightCameraStream"),
+  missionForm: document.getElementById("missionForm"),
+  missionName: document.getElementById("missionName"),
+  missionSpeed: document.getElementById("missionSpeed"),
+  missionSpeedValue: document.getElementById("missionSpeedValue"),
+  missionSegments: document.getElementById("missionSegments"),
+  previewPlanButton: document.getElementById("previewPlanButton"),
+  startPlanButton: document.getElementById("startPlanButton"),
+  stopPlanButton: document.getElementById("stopPlanButton"),
+  planStatusMetric: document.getElementById("planStatusMetric"),
+  planProgressMetric: document.getElementById("planProgressMetric"),
+  planRemainingMetric: document.getElementById("planRemainingMetric"),
+  planCurrentMetric: document.getElementById("planCurrentMetric"),
+  planPreview: document.getElementById("planPreview"),
 };
 
 function clamp(value, min, max) {
@@ -84,7 +111,15 @@ async function postJson(url, payload = {}) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  return response.json();
+  let body = await response.json().catch(() => ({
+    ok: false,
+    error: "bad_response",
+  }));
+  if (!body || typeof body !== "object") {
+    body = { ok: response.ok, value: body };
+  }
+  if (!response.ok) body.http_status = response.status;
+  return body;
 }
 
 function nextCommandSeq() {
@@ -93,14 +128,17 @@ function nextCommandSeq() {
 }
 
 function setPage(pageName, shouldStop = false) {
-  const nextPage = pageName === "diagnostics" ? "diagnostics" : "operator";
+  const nextPage = ["autonomy", "diagnostics"].includes(pageName) ? pageName : "operator";
   state.activePage = nextPage;
 
   elements.operatorPage.hidden = nextPage !== "operator";
+  elements.autonomyPage.hidden = nextPage !== "autonomy";
   elements.diagnosticsPage.hidden = nextPage !== "diagnostics";
   elements.operatorPage.classList.toggle("active-page", nextPage === "operator");
+  elements.autonomyPage.classList.toggle("active-page", nextPage === "autonomy");
   elements.diagnosticsPage.classList.toggle("active-page", nextPage === "diagnostics");
   elements.operatorPageButton.classList.toggle("active-tab", nextPage === "operator");
+  elements.autonomyPageButton.classList.toggle("active-tab", nextPage === "autonomy");
   elements.diagnosticsPageButton.classList.toggle("active-tab", nextPage === "diagnostics");
 
   if (shouldStop && nextPage !== "operator") {
@@ -113,13 +151,23 @@ elements.operatorPageButton.addEventListener("click", () => {
   setPage("operator");
 });
 
+elements.autonomyPageButton.addEventListener("click", () => {
+  history.replaceState(null, "", "#autonomy");
+  setPage("autonomy", true);
+});
+
 elements.diagnosticsPageButton.addEventListener("click", () => {
   history.replaceState(null, "", "#diagnostics");
   setPage("diagnostics", true);
 });
 
 window.addEventListener("hashchange", () => {
-  setPage(location.hash === "#diagnostics" ? "diagnostics" : "operator", true);
+  const pageName = location.hash === "#diagnostics"
+    ? "diagnostics"
+    : location.hash === "#autonomy"
+      ? "autonomy"
+      : "operator";
+  setPage(pageName, true);
 });
 
 function getAxes() {
@@ -278,6 +326,78 @@ elements.autoSprayToggle.addEventListener("change", async () => {
   await postJson("/api/control/auto-spray", { enabled: elements.autoSprayToggle.checked });
 });
 
+function renderMissionSpeed() {
+  elements.missionSpeedValue.textContent = elements.missionSpeed.value;
+}
+
+function buildMissionPayload() {
+  let parsed;
+  try {
+    parsed = JSON.parse(elements.missionSegments.value);
+  } catch (error) {
+    throw new Error("Segmentlar JSON formati noto'g'ri.");
+  }
+
+  const segments = Array.isArray(parsed) ? parsed : parsed.segments;
+  if (!Array.isArray(segments) || segments.length === 0) {
+    throw new Error("Kamida bitta segment kerak.");
+  }
+
+  return {
+    name: elements.missionName.value.trim() || "Agro Mission",
+    speed_limit: Number(elements.missionSpeed.value),
+    segments,
+  };
+}
+
+function showPlanMessage(message, isError = false) {
+  elements.planPreview.textContent = message;
+  elements.planPreview.classList.toggle("error", isError);
+}
+
+function renderPlanResponse(response) {
+  if (!response.ok) {
+    showPlanMessage(response.detail || response.error || "Reja qabul qilinmadi.", true);
+    return;
+  }
+
+  const plan = response.plan || response;
+  showPlanMessage(JSON.stringify(plan, null, 2), false);
+}
+
+async function previewMissionPlan() {
+  try {
+    const payload = buildMissionPayload();
+    const response = await postJson("/api/autonomy/plan", payload);
+    renderPlanResponse(response);
+  } catch (error) {
+    showPlanMessage(error.message, true);
+  }
+}
+
+async function startMissionPlan() {
+  try {
+    const payload = buildMissionPayload();
+    const response = await postJson("/api/autonomy/start", payload);
+    renderPlanResponse(response);
+  } catch (error) {
+    showPlanMessage(error.message, true);
+  }
+}
+
+async function stopMissionPlan() {
+  const response = await postJson("/api/autonomy/stop", {});
+  renderPlanResponse(response);
+}
+
+elements.missionSegments.value = JSON.stringify(DEFAULT_SEGMENTS, null, 2);
+renderMissionSpeed();
+
+elements.missionSpeed.addEventListener("input", renderMissionSpeed);
+elements.previewPlanButton.addEventListener("click", previewMissionPlan);
+elements.startPlanButton.addEventListener("click", startMissionPlan);
+elements.stopPlanButton.addEventListener("click", stopMissionPlan);
+
 document.querySelectorAll(".test-pump-button").forEach((button) => {
   button.addEventListener("click", async () => {
     const side = button.dataset.pump;
@@ -329,10 +449,6 @@ function cameraMeta(camera, fallback) {
   return `FPS ${camera.fps} | det ${camera.detections} | ${centered} ${detection.offset_px}px | conf ${detection.confidence}`;
 }
 
-function listToHtml(items) {
-  return items.map((item) => `<li>${item}</li>`).join("");
-}
-
 function renderPumpStates(pumps) {
   SPRAY_ZONES.forEach((zone) => {
     const element = elements[`${zone}PumpState`];
@@ -340,6 +456,34 @@ function renderPumpStates(pumps) {
     element.textContent = enabled ? "ON" : "OFF";
     element.classList.toggle("pump-on", enabled);
   });
+}
+
+function renderWarnings(items) {
+  elements.warningsList.replaceChildren(
+    ...items.map((item) => {
+      const listItem = document.createElement("li");
+      listItem.textContent = item;
+      return listItem;
+    })
+  );
+}
+
+function renderDiagnostics(esp32, measurements, spray) {
+  const rows = [
+    `Transport: ${esp32.transport || "-"}`,
+    `Base URL: ${esp32.base_url || "-"}`,
+    `Serial port: ${esp32.serial_port || "-"}`,
+    `Firmware: ${esp32.firmware_mode || "-"}`,
+    `Reference margin: ${measurements.lane_margin_cm ?? "-"} sm`,
+    `Spray count: ${spray.trigger_count || 0}`,
+  ];
+  elements.diagEsp32.replaceChildren(
+    ...rows.map((row) => {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = row;
+      return paragraph;
+    })
+  );
 }
 
 async function loadConfig() {
@@ -360,6 +504,7 @@ async function refreshState() {
     const esp32 = snapshot.esp32 || {};
     const control = snapshot.control || {};
     const spray = snapshot.spray || {};
+    const autonomy = snapshot.autonomy || {};
     const cameras = snapshot.cameras || {};
 
     setBadge(
@@ -382,16 +527,13 @@ async function refreshState() {
 
     renderPumpStates(snapshot.pumps || {});
 
-    elements.warningsList.innerHTML = listToHtml(
-      snapshot.warnings?.length ? snapshot.warnings : ["Ogohlantirish yo'q"]
-    );
+    elements.planStatusMetric.textContent = autonomy.status || "idle";
+    elements.planProgressMetric.textContent = `${Math.round(Number(autonomy.progress || 0) * 100)}%`;
+    elements.planRemainingMetric.textContent = `${Number(autonomy.remaining_seconds || 0).toFixed(1)}s`;
+    elements.planCurrentMetric.textContent = autonomy.current_label || "-";
 
-    elements.diagEsp32.innerHTML = `
-      <p>Base URL: ${esp32.base_url || "-"}</p>
-      <p>Firmware: ${esp32.firmware_mode || "-"}</p>
-      <p>Chel usti track zaxirasi: ${measurements.lane_margin_cm ?? "-"} sm</p>
-      <p>Spray count: ${spray.trigger_count || 0}</p>
-    `;
+    renderWarnings(snapshot.warnings?.length ? snapshot.warnings : ["Ogohlantirish yo'q"]);
+    renderDiagnostics(esp32, measurements, spray);
 
     elements.autoSprayToggle.checked = Boolean(control.auto_spray);
     state.speedLimit = Number(control.speed_limit || state.speedLimit);
@@ -404,6 +546,12 @@ async function refreshState() {
 }
 
 renderSpeed();
-setPage(location.hash === "#diagnostics" ? "diagnostics" : "operator");
+setPage(
+  location.hash === "#diagnostics"
+    ? "diagnostics"
+    : location.hash === "#autonomy"
+      ? "autonomy"
+      : "operator"
+);
 loadConfig().finally(refreshState);
 setInterval(refreshState, 1000);

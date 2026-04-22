@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import threading
 import time
@@ -20,6 +21,14 @@ from flower_robot.vision import VisionHub
 
 STATIC_ROOT = resource_path("flower_robot", "static")
 SPRAY_ZONES = {"left", "front", "right"}
+
+
+class RequestJsonError(ValueError):
+    pass
+
+
+def _clamp(value: float, low: float, high: float) -> float:
+    return max(low, min(high, value))
 
 
 def _json_bytes(payload: dict[str, Any]) -> bytes:
@@ -49,6 +58,15 @@ class RequestHandler(BaseHTTPRequestHandler):
         if path == "/assets/app.js":
             self._serve_static("app.js", "application/javascript; charset=utf-8")
             return
+        if path == "/manifest.webmanifest":
+            self._serve_static("manifest.webmanifest", "application/manifest+json; charset=utf-8")
+            return
+        if path == "/service-worker.js":
+            self._serve_static("service-worker.js", "application/javascript; charset=utf-8")
+            return
+        if path.startswith("/assets/icons/"):
+            self._serve_static(path.removeprefix("/assets/"), "image/png")
+            return
         if path == "/api/state":
             self._send_json(HTTPStatus.OK, self.context.state.snapshot())
             return
@@ -65,51 +83,74 @@ class RequestHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         parsed = urlparse(self.path)
         path = parsed.path
-        payload = self._read_json()
+        try:
+            payload = self._read_json()
+        except RequestJsonError as exc:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "bad_json", "detail": str(exc)},
+            )
+            return
 
-        if path == "/api/control/tank":
-            response = self.context.handle_tank_command(payload)
-            self._send_json(HTTPStatus.OK, response)
-            return
-        if path == "/api/control/stop":
-            response = self.context.handle_stop(payload)
-            self._send_json(HTTPStatus.OK, response)
-            return
-        if path == "/api/control/speed":
-            response = self.context.handle_speed(payload)
-            self._send_json(HTTPStatus.OK, response)
-            return
-        if path == "/api/control/pump":
-            response = self.context.handle_pump(payload)
-            self._send_json(HTTPStatus.OK, response)
-            return
-        if path == "/api/control/auto-spray":
-            response = self.context.handle_auto_spray(payload)
-            self._send_json(HTTPStatus.OK, response)
-            return
-        if path == "/api/autonomy/plan":
-            response, code = self.context.preview_plan(payload)
-            self._send_json(code, response)
-            return
-        if path == "/api/autonomy/start":
-            response, code = self.context.start_plan(payload)
-            self._send_json(code, response)
-            return
-        if path == "/api/autonomy/stop":
-            response = self.context.stop_plan()
-            self._send_json(HTTPStatus.OK, response)
+        try:
+            if path == "/api/control/tank":
+                response = self.context.handle_tank_command(payload)
+                self._send_json(HTTPStatus.OK, response)
+                return
+            if path == "/api/control/stop":
+                response = self.context.handle_stop(payload)
+                self._send_json(HTTPStatus.OK, response)
+                return
+            if path == "/api/control/speed":
+                response = self.context.handle_speed(payload)
+                self._send_json(HTTPStatus.OK, response)
+                return
+            if path == "/api/control/pump":
+                response = self.context.handle_pump(payload)
+                self._send_json(HTTPStatus.OK, response)
+                return
+            if path == "/api/control/auto-spray":
+                response = self.context.handle_auto_spray(payload)
+                self._send_json(HTTPStatus.OK, response)
+                return
+            if path == "/api/autonomy/plan":
+                response, code = self.context.preview_plan(payload)
+                self._send_json(code, response)
+                return
+            if path == "/api/autonomy/start":
+                response, code = self.context.start_plan(payload)
+                self._send_json(code, response)
+                return
+            if path == "/api/autonomy/stop":
+                response = self.context.stop_plan()
+                self._send_json(HTTPStatus.OK, response)
+                return
+        except ValueError as exc:
+            self._send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "bad_request", "detail": str(exc)},
+            )
             return
 
         self._send_json(HTTPStatus.NOT_FOUND, {"error": "POST endpoint topilmadi."})
 
     def _read_json(self) -> dict[str, Any]:
-        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError as exc:
+            raise RequestJsonError("Content-Length noto'g'ri.") from exc
         if length <= 0:
             return {}
         raw = self.rfile.read(length)
         if not raw:
             return {}
-        return json.loads(raw.decode("utf-8"))
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise RequestJsonError("JSON format noto'g'ri.") from exc
+        if not isinstance(payload, dict):
+            raise RequestJsonError("JSON object bo'lishi kerak.")
+        return payload
 
     def _serve_static(self, file_name: str, content_type: str) -> None:
         file_path = STATIC_ROOT / file_name
@@ -142,7 +183,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"Content-Length: {len(frame)}\r\n\r\n".encode("ascii"))
                 self.wfile.write(frame)
                 self.wfile.write(b"\r\n")
-                time.sleep(0.12)
+                time.sleep(0.07)
         except (BrokenPipeError, ConnectionResetError):
             return
 
@@ -194,7 +235,10 @@ class AppContext:
         return {
             "server": {"host": self.settings.server.host, "port": self.settings.server.port},
             "esp32": {
+                "transport": self.settings.esp32.transport,
                 "base_url": self.settings.esp32.base_url,
+                "serial_port": self.settings.esp32.serial_port,
+                "baudrate": self.settings.esp32.baudrate,
                 "firmware_mode": self.settings.esp32.firmware_mode,
             },
             "measurements": {
@@ -239,14 +283,55 @@ class AppContext:
             self._latest_manual_seq = seq
         return True, seq
 
+    @staticmethod
+    def _float_payload(payload: dict[str, Any], key: str, default: float) -> float:
+        raw_value = payload.get(key, default)
+        try:
+            return float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} son bo'lishi kerak.") from exc
+
+    @staticmethod
+    def _int_payload(payload: dict[str, Any], key: str, default: Any) -> int:
+        raw_value = payload.get(key, default)
+        try:
+            return int(float(raw_value))
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"{key} butun son bo'lishi kerak.") from exc
+
+    @staticmethod
+    def _bool_payload(payload: dict[str, Any], key: str, default: bool = False) -> bool:
+        raw_value = payload.get(key, default)
+        if isinstance(raw_value, bool):
+            return raw_value
+        if isinstance(raw_value, (int, float)):
+            return bool(raw_value)
+        if isinstance(raw_value, str):
+            normalized = raw_value.strip().lower()
+            if normalized in {"1", "true", "on", "yes"}:
+                return True
+            if normalized in {"0", "false", "off", "no"}:
+                return False
+        raise ValueError(f"{key} true/false bo'lishi kerak.")
+
     def handle_tank_command(self, payload: dict[str, Any]) -> dict[str, Any]:
         accepted, seq = self._accept_manual_seq(payload)
         if not accepted:
             return {"ok": True, "ignored": "stale", "seq": seq}
 
-        left = float(payload.get("left", 0.0))
-        right = float(payload.get("right", 0.0))
-        speed_limit = int(payload.get("speed_limit", self.state.snapshot()["control"]["speed_limit"]))
+        left = _clamp(self._float_payload(payload, "left", 0.0), -1.0, 1.0)
+        right = _clamp(self._float_payload(payload, "right", 0.0), -1.0, 1.0)
+        speed_limit = int(
+            _clamp(
+                self._int_payload(
+                    payload,
+                    "speed_limit",
+                    int(self.state.snapshot()["control"]["speed_limit"]),
+                ),
+                0,
+                255,
+            )
+        )
 
         if self.state.snapshot()["autonomy"]["running"]:
             self.autonomy.stop("manual override")
@@ -272,7 +357,9 @@ class AppContext:
         return {"ok": True}
 
     def handle_speed(self, payload: dict[str, Any]) -> dict[str, Any]:
-        speed_limit = int(payload.get("speed_limit", payload.get("value", 120)))
+        speed_limit = int(
+            _clamp(self._int_payload(payload, "speed_limit", payload.get("value", 120)), 0, 255)
+        )
         self.state.update_control(speed_limit=speed_limit)
         self.esp32.set_speed_limit(speed_limit)
         return {"ok": True, "speed_limit": speed_limit}
@@ -281,12 +368,12 @@ class AppContext:
         side = str(payload.get("side", "left"))
         if side not in SPRAY_ZONES:
             return {"ok": False, "error": "invalid_pump_side"}
-        enabled = bool(payload.get("enabled", False))
+        enabled = self._bool_payload(payload, "enabled", False)
         self.esp32.set_pump(side, enabled)
         return {"ok": True, "side": side, "enabled": enabled}
 
     def handle_auto_spray(self, payload: dict[str, Any]) -> dict[str, Any]:
-        enabled = bool(payload.get("enabled", False))
+        enabled = self._bool_payload(payload, "enabled", False)
         self.state.update_control(auto_spray=enabled)
         return {"ok": True, "enabled": enabled, "firmware_mode": self.settings.esp32.firmware_mode}
 
@@ -344,14 +431,15 @@ class AppContext:
         self.auto_spray.maybe_trigger(camera_name, detection)
 
     def _build_notes(self) -> list[str]:
-        margin = self.settings.measurements.lane_margin_cm
         notes = [
-            f"Chel ustidagi yurish track'i bo'yicha mexanik zaxira taxminan {margin:.2f} sm.",
-            "Aniq avtonom yurish uchun chel center tracking + encoder + IMU tavsiya qilinadi.",
+            "Chel ustidan yurish konfiguratsiyasi real hardware geometriyasiga moslanadi.",
+            "Aniq avtonom yurish uchun encoder, IMU yoki vision feedback qo'shish mumkin.",
             "Laptopdagi local server telefon brauzeridan ochiladi, cloud server shart emas.",
         ]
         if self.settings.esp32.firmware_mode == "advanced":
             notes.append("Auto spray yoqilsa left/front/right kamera markazga tushgan gul uchun mos kanalga pulse yuboriladi.")
+        if self.settings.esp32.transport == "serial":
+            notes.append(f"ESP32 USB serial orqali ulanadi: {self.settings.esp32.serial_port}.")
         return notes
 
 
@@ -362,14 +450,22 @@ class RobotApplication:
         self._httpd: ThreadingHTTPServer | None = None
 
     def serve_forever(self) -> None:
-        self._context.start_background_tasks()
         handler = partial(RequestHandler, context=self._context)
-        self._httpd = ThreadingHTTPServer(
-            (self._settings.server.host, self._settings.server.port),
-            handler,
-        )
-
         address = f"http://{self._settings.server.host}:{self._settings.server.port}"
+
+        try:
+            self._httpd = ThreadingHTTPServer(
+                (self._settings.server.host, self._settings.server.port),
+                handler,
+            )
+        except OSError as exc:
+            if exc.errno == errno.EADDRINUSE:
+                print(f"Port band: {address}")
+                print("Boshqa serverni to'xtating yoki --port bilan boshqa port tanlang.")
+                raise SystemExit(1) from exc
+            raise
+
+        self._context.start_background_tasks()
         print(f"Flower Rover Control Center ishga tushdi: {address}")
         print("Telefonni shu tarmoqda ulab brauzerdan shu manzilni oching.")
         try:

@@ -17,7 +17,7 @@ Bu hujjat soft jamoa, hardware jamoa va operator uchun umumiy ishchi yo'riqnoma 
 Loyiha vazifasi:
 
 - robotni telefon va kompyuterdan boshqarish
-- old kamera orqali yo'lni ko'rish va olddagi gullarni aniqlash
+- old kamera orqali yo'l, harakat va olddagi gullarni ko'rish
 - chap va o'ng kamera orqali yon tomondagi gullarni aniqlash
 - gul markazga tushganda mos nasosni ishga tushirish
 - robotning barcha muhim holatlarini kompyuter ekranida ko'rsatish
@@ -68,15 +68,14 @@ Laptop quyidagi vazifalarni bajaradi:
 - operator dashboardni ko'rsatadi
 - auto spray mantiqini boshqaradi
 - autonomy logikasini hisoblaydi
-- ESP32 bilan HTTP orqali gaplashadi
-
+- ESP32 bilan USB Serial orqali gaplashadi
 #### ESP32
 
 ESP32 quyidagi vazifalarni bajaradi:
 
 - motorlarni boshqaradi
 - chap, old va o'ng spray kanallarini yoqadi yoki o'chiradi
-- laptopdan kelgan buyruqlarni qabul qiladi
+- laptopdan USB Serial orqali kelgan buyruqlarni qabul qiladi
 - failsafe bajaradi
 - oddiy, tez va ishonchli executor sifatida ishlaydi
 
@@ -123,8 +122,8 @@ Tizim quyidagilarni bajarishi shart:
 Spray logikasi quyidagicha bo'lishi kerak:
 
 - `left camera -> left pump`
+- `front camera -> front pump`
 - `right camera -> right pump`
-- `front camera -> front pump/valve`
 - centered detection bo'lsa spray pulse yuborish
 - false triggerni kamaytirish uchun cooldown ishlatish
 - bir vaqtning o'zida noto'g'ri takror trigger bo'lmasligi
@@ -235,7 +234,7 @@ Tizim quyidagi warninglarni chiqara olishi kerak:
 - YOLO detect qilmayapti
 - tarmoq kechikishi yuqori
 - autonomy risk
-- tor chel usti track ogohlantirishi
+- hardware yoki autonomy risk ogohlantirishi
 
 ## 7. Data Flow
 
@@ -313,10 +312,10 @@ To'liq stabil autonomy uchun quyidagilar kerak:
 - yon sensorlar
 - encoder
 - IMU
-- chel center tracking
+- chel usti tracking
 - feedback control
 
-Faqat `qancha metr yurish` asosidagi autonomy chel ustida xavfli.
+Faqat `qancha metr yurish` asosidagi autonomy feedbacksiz taxminiy ishlaydi.
 
 ## 11. Musobaqa Uchun To'g'ri Prioritet
 

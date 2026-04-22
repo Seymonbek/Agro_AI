@@ -63,6 +63,9 @@ def main() -> None:
         settings.server.port = args.port
     if args.demo_cameras:
         settings.auto_spray.default_enabled = False
+        settings.esp32.timeout_sec = min(settings.esp32.timeout_sec, 0.2)
+        settings.esp32.serial_timeout_sec = min(settings.esp32.serial_timeout_sec, 0.2)
+        settings.esp32.serial_ready_delay_sec = 0.0
         for camera in settings.cameras:
             camera.source = f"demo:{camera.name}"
             camera.detect_flowers = False
