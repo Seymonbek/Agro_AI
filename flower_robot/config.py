@@ -8,6 +8,9 @@ from typing import Any
 from flower_robot.paths import resource_path, runtime_root
 
 
+SUPPORTED_PUMP_ZONES = ("left", "front", "right")
+
+
 @dataclass
 class ServerConfig:
     host: str = "0.0.0.0"
@@ -57,9 +60,26 @@ class AutoSprayConfig:
     pulse_ms: int = 350
     cooldown_ms: int = 1200
     center_tolerance_px: int = 40
-    camera_to_pump: dict[str, str] = field(
-        default_factory=lambda: {"left": "left", "front": "front", "right": "right"}
+    camera_to_pump: dict[str, tuple[str, ...]] = field(
+        default_factory=lambda: {"front": ("left", "right")}
     )
+
+    @property
+    def pump_zones(self) -> list[str]:
+        zones: list[str] = []
+        for pumps in self.camera_to_pump.values():
+            for pump in pumps:
+                if pump not in zones:
+                    zones.append(pump)
+        return zones
+
+
+@dataclass
+class ManeuverConfig:
+    turn_90_speed: float = 0.45
+    turn_90_speed_limit: int = 180
+    turn_90_left_seconds: float = 1.1
+    turn_90_right_seconds: float = 1.1
 
 
 @dataclass
@@ -77,6 +97,7 @@ class AppSettings:
     measurements: MeasurementsConfig
     vision: VisionConfig
     auto_spray: AutoSprayConfig
+    maneuvers: ManeuverConfig
     cameras: list[CameraConfig]
     config_path: Path
 
@@ -115,12 +136,18 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "pulse_ms": 350,
         "cooldown_ms": 1200,
         "center_tolerance_px": 40,
-        "camera_to_pump": {"left": "left", "front": "front", "right": "right"},
+        "camera_to_pump": {"front": ["left", "right"]},
+    },
+    "maneuvers": {
+        "turn_90_speed": 0.45,
+        "turn_90_speed_limit": 180,
+        "turn_90_left_seconds": 1.1,
+        "turn_90_right_seconds": 1.1,
     },
     "cameras": [
         {"name": "front", "source": 0, "enabled": True, "detect_flowers": True},
-        {"name": "left", "source": 1, "enabled": True, "detect_flowers": True},
-        {"name": "right", "source": 2, "enabled": True, "detect_flowers": True},
+        {"name": "left", "source": 1, "enabled": True, "detect_flowers": False},
+        {"name": "right", "source": 2, "enabled": True, "detect_flowers": False},
     ],
 }
 
@@ -139,6 +166,28 @@ def _normalise_camera_source(value: int | str) -> int | str:
     if isinstance(value, str) and value.isdigit():
         return int(value)
     return value
+
+
+def _normalise_camera_to_pump(value: Any) -> dict[str, tuple[str, ...]]:
+    if not isinstance(value, dict):
+        return {}
+
+    normalized: dict[str, tuple[str, ...]] = {}
+    for camera_name, raw_pumps in value.items():
+        pumps: list[str] = []
+        if isinstance(raw_pumps, (list, tuple)):
+            candidates = raw_pumps
+        else:
+            candidates = [raw_pumps]
+
+        for raw_pump in candidates:
+            pump_name = str(raw_pump).strip().lower()
+            if pump_name and pump_name not in pumps:
+                pumps.append(pump_name)
+
+        if pumps:
+            normalized[str(camera_name).strip()] = tuple(pumps)
+    return normalized
 
 
 def _resolve_model_path(model_path: str) -> str:
@@ -164,7 +213,12 @@ def load_settings(config_path: Path | None = None) -> AppSettings:
     vision_dict = dict(config_data["vision"])
     vision_dict["model_path"] = _resolve_model_path(vision_dict["model_path"])
     vision = VisionConfig(**vision_dict)
-    auto_spray = AutoSprayConfig(**config_data["auto_spray"])
+    auto_spray_dict = dict(config_data["auto_spray"])
+    auto_spray_dict["camera_to_pump"] = _normalise_camera_to_pump(
+        auto_spray_dict.get("camera_to_pump")
+    )
+    auto_spray = AutoSprayConfig(**auto_spray_dict)
+    maneuvers = ManeuverConfig(**config_data["maneuvers"])
     cameras = [
         CameraConfig(
             name=item["name"],
@@ -180,6 +234,7 @@ def load_settings(config_path: Path | None = None) -> AppSettings:
         measurements=measurements,
         vision=vision,
         auto_spray=auto_spray,
+        maneuvers=maneuvers,
         cameras=cameras,
         config_path=runtime_config,
     )

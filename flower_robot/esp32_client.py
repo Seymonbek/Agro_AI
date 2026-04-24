@@ -8,11 +8,9 @@ from urllib.error import URLError
 from urllib.parse import urlencode
 from urllib.request import urlopen
 
-from flower_robot.config import Esp32Config
+from flower_robot.config import Esp32Config, SUPPORTED_PUMP_ZONES
 from flower_robot.serial_ports import resolve_serial_port
 from flower_robot.state import RobotStateStore
-
-SPRAY_ZONES = {"left", "front", "right"}
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -24,6 +22,7 @@ class ESP32Client:
         self,
         config: Esp32Config,
         state: RobotStateStore,
+        pump_zones: tuple[str, ...] | list[str] | None = None,
         serial_factory: Callable[..., Any] | None = None,
     ) -> None:
         self._config = config
@@ -34,6 +33,8 @@ class ESP32Client:
         self._serial: Any | None = None
         self._last_signature: tuple[Any, ...] | None = None
         self._last_sent_at = 0.0
+        zones = list(pump_zones or SUPPORTED_PUMP_ZONES)
+        self._pump_zones = tuple(zone for zone in zones if zone in SUPPORTED_PUMP_ZONES)
 
     @property
     def _transport(self) -> str:
@@ -156,7 +157,7 @@ class ESP32Client:
             self._state.update_pumps(
                 **{
                     zone: bool(pumps.get(zone, False))
-                    for zone in SPRAY_ZONES
+                    for zone in self._pump_zones
                 }
             )
 
@@ -232,12 +233,12 @@ class ESP32Client:
                 self._http_request(self._legacy_path("stop"))
             self._last_signature = (0.0, 0.0, 0)
             self._last_sent_at = time.monotonic()
-            self._state.update_pumps(left=False, front=False, right=False)
+            self._state.update_pumps(**{zone: False for zone in self._pump_zones})
         except (URLError, TimeoutError, OSError, RuntimeError) as exc:
             self._mark_offline(exc)
 
     def set_pump(self, side: str, enabled: bool) -> None:
-        if side not in SPRAY_ZONES:
+        if side not in self._pump_zones:
             return
 
         try:

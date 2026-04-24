@@ -44,7 +44,7 @@ class FakeSerialPort:
     def readline(self) -> bytes:
         if self.responses:
             return self.responses.pop(0)
-        return b'{"ok":true,"pumps":{"left":false,"front":false,"right":false}}\n'
+        return b'{"ok":true,"pumps":{"left":false,"right":false}}\n'
 
     def reset_input_buffer(self) -> None:
         return None
@@ -62,6 +62,10 @@ class FlowerRobotCoreTests(unittest.TestCase):
         self.assertEqual(settings.esp32.transport, "serial")
         self.assertEqual(settings.esp32.firmware_mode, "advanced")
         self.assertGreater(settings.measurements.lane_margin_cm, 0)
+        self.assertEqual(settings.auto_spray.pump_zones, ["left", "right"])
+        self.assertTrue(settings.cameras[0].detect_flowers)
+        self.assertFalse(settings.cameras[1].detect_flowers)
+        self.assertFalse(settings.cameras[2].detect_flowers)
 
     def test_serial_esp32_client_protocol(self) -> None:
         settings = load_settings()
@@ -70,7 +74,7 @@ class FlowerRobotCoreTests(unittest.TestCase):
         state = RobotStateStore(settings)
         fake_port = FakeSerialPort(
             [
-                b'{"ok":true,"pumps":{"left":false,"front":true,"right":false}}\n',
+                b'{"ok":true,"pumps":{"left":true,"right":false}}\n',
                 b'{"ok":true}\n',
                 b'{"ok":true}\n',
                 b'{"ok":true}\n',
@@ -79,12 +83,13 @@ class FlowerRobotCoreTests(unittest.TestCase):
         client = ESP32Client(
             settings.esp32,
             state,
+            pump_zones=settings.auto_spray.pump_zones,
             serial_factory=lambda **_: fake_port,
         )
 
         client.poll_status()
         mode = client.drive_tank(1.2, -1.2, 999)
-        client.set_pump("front", False)
+        client.set_pump("right", False)
         client.stop()
 
         self.assertEqual(mode, "serial")
@@ -93,13 +98,13 @@ class FlowerRobotCoreTests(unittest.TestCase):
             [
                 b"STATUS\n",
                 b"DRIVE 1.000 -1.000 255\n",
-                b"PUMP front off\n",
+                b"PUMP right off\n",
                 b"STOP\n",
             ],
         )
         snapshot = state.snapshot()
         self.assertTrue(snapshot["esp32"]["online"])
-        self.assertFalse(snapshot["pumps"]["front"])
+        self.assertFalse(snapshot["pumps"]["right"])
 
     def test_mission_plan_converts_meters(self) -> None:
         settings = load_settings()
@@ -170,25 +175,7 @@ class FlowerRobotCoreTests(unittest.TestCase):
         self.assertEqual(snapshot["progress"], 1.0)
         self.assertIn((0.2, 0.2, 150), fake_esp.drive_calls)
 
-    def test_auto_spray_pulses_expected_pump(self) -> None:
-        settings = load_settings()
-        state = RobotStateStore(settings)
-        state.update_control(auto_spray=True)
-        fake_esp = FakeESP32()
-        controller = AutoSprayController(settings.auto_spray, fake_esp, state)
-        controller.maybe_trigger(
-            "left",
-            DetectionResult(
-                detections=1,
-                last_detection={"centered": True},
-                centered_detection={"centered": True},
-            ),
-        )
-        time.sleep((settings.auto_spray.pulse_ms / 1000.0) + 0.1)
-        self.assertEqual(fake_esp.calls, [("left", True), ("left", False)])
-        self.assertEqual(state.snapshot()["spray"]["last_pump"], "left")
-
-    def test_front_auto_spray_maps_to_front_pump(self) -> None:
+    def test_auto_spray_pulses_expected_pumps(self) -> None:
         settings = load_settings()
         state = RobotStateStore(settings)
         state.update_control(auto_spray=True)
@@ -203,10 +190,33 @@ class FlowerRobotCoreTests(unittest.TestCase):
             ),
         )
         time.sleep((settings.auto_spray.pulse_ms / 1000.0) + 0.1)
-        self.assertEqual(fake_esp.calls, [("front", True), ("front", False)])
+        self.assertEqual(
+            fake_esp.calls,
+            [("left", True), ("right", True), ("left", False), ("right", False)],
+        )
         snapshot = state.snapshot()["spray"]
-        self.assertEqual(snapshot["last_pump"], "front")
-        self.assertEqual(snapshot["zones"]["front"]["trigger_count"], 1)
+        self.assertEqual(snapshot["last_pumps"], ["left", "right"])
+        self.assertEqual(snapshot["zones"]["left"]["trigger_count"], 1)
+        self.assertEqual(snapshot["zones"]["right"]["trigger_count"], 1)
+
+    def test_front_auto_spray_records_joined_pump_label(self) -> None:
+        settings = load_settings()
+        state = RobotStateStore(settings)
+        state.update_control(auto_spray=True)
+        fake_esp = FakeESP32()
+        controller = AutoSprayController(settings.auto_spray, fake_esp, state)
+        controller.maybe_trigger(
+            "front",
+            DetectionResult(
+                detections=1,
+                last_detection={"centered": True},
+                centered_detection={"centered": True},
+            ),
+        )
+        time.sleep((settings.auto_spray.pulse_ms / 1000.0) + 0.1)
+        snapshot = state.snapshot()["spray"]
+        self.assertEqual(snapshot["last_pump"], "left,right")
+        self.assertEqual(snapshot["last_camera"], "front")
 
     def test_auto_spray_ignores_when_disabled(self) -> None:
         settings = load_settings()
@@ -215,7 +225,7 @@ class FlowerRobotCoreTests(unittest.TestCase):
         fake_esp = FakeESP32()
         controller = AutoSprayController(settings.auto_spray, fake_esp, state)
         controller.maybe_trigger(
-            "left",
+            "front",
             DetectionResult(
                 detections=1,
                 last_detection={"centered": True},
@@ -237,12 +247,17 @@ class FlowerRobotCoreTests(unittest.TestCase):
             centered_detection={"centered": True},
         )
 
-        controller.maybe_trigger("right", detection)
-        controller.maybe_trigger("right", detection)
+        controller.maybe_trigger("front", detection)
+        controller.maybe_trigger("front", detection)
         time.sleep((settings.auto_spray.pulse_ms / 1000.0) + 0.1)
 
-        self.assertEqual(fake_esp.calls, [("right", True), ("right", False)])
-        self.assertEqual(state.snapshot()["spray"]["zones"]["right"]["trigger_count"], 1)
+        self.assertEqual(
+            fake_esp.calls,
+            [("left", True), ("right", True), ("left", False), ("right", False)],
+        )
+        snapshot = state.snapshot()["spray"]
+        self.assertEqual(snapshot["zones"]["left"]["trigger_count"], 1)
+        self.assertEqual(snapshot["zones"]["right"]["trigger_count"], 1)
 
 
 if __name__ == "__main__":

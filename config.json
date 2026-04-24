@@ -36,10 +36,17 @@
     "cooldown_ms": 1200,
     "center_tolerance_px": 40,
     "camera_to_pump": {
-      "left": "left",
-      "front": "front",
-      "right": "right"
+      "front": [
+        "left",
+        "right"
+      ]
     }
+  },
+  "maneuvers": {
+    "turn_90_speed": 0.45,
+    "turn_90_speed_limit": 180,
+    "turn_90_left_seconds": 1.1,
+    "turn_90_right_seconds": 1.1
   },
   "cameras": [
     {
@@ -52,13 +59,13 @@
       "name": "left",
       "source": 1,
       "enabled": true,
-      "detect_flowers": true
+      "detect_flowers": false
     },
     {
       "name": "right",
       "source": 2,
       "enabled": true,
-      "detect_flowers": true
+      "detect_flowers": false
     }
   ]
 }

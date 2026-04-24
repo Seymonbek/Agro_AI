@@ -13,6 +13,7 @@ class RobotStateStore:
         self._settings = settings
         self._lock = threading.Lock()
         self._started_at = time.monotonic()
+        pump_zones = settings.auto_spray.pump_zones
         self._state: dict[str, Any] = {
             "control": {
                 "mode": "manual",
@@ -31,16 +32,16 @@ class RobotStateStore:
                 "last_error": None,
                 "last_ok_at": None,
             },
-            "pumps": {"left": False, "front": False, "right": False},
+            "pumps": {zone: False for zone in pump_zones},
             "spray": {
                 "last_camera": None,
                 "last_pump": None,
+                "last_pumps": [],
                 "last_trigger_at": None,
                 "trigger_count": 0,
                 "zones": {
-                    "left": {"trigger_count": 0, "last_trigger_at": None},
-                    "front": {"trigger_count": 0, "last_trigger_at": None},
-                    "right": {"trigger_count": 0, "last_trigger_at": None},
+                    zone: {"trigger_count": 0, "last_trigger_at": None}
+                    for zone in pump_zones
                 },
             },
             "autonomy": {
@@ -126,11 +127,12 @@ class RobotStateStore:
                 "ESP32 legacy rejimida: dinamik chap/o'ng PWM uchun advanced firmware tavsiya qilinadi."
             )
 
-        for camera_name, pump_name in self._settings.auto_spray.camera_to_pump.items():
-            if pump_name not in snap["pumps"]:
-                warnings.append(
-                    f"Spray mapping xato: {camera_name} kamera '{pump_name}' kanaliga ulangan, lekin bunday kanal yo'q."
-                )
+        for camera_name, pump_names in self._settings.auto_spray.camera_to_pump.items():
+            for pump_name in pump_names:
+                if pump_name not in snap["pumps"]:
+                    warnings.append(
+                        f"Spray mapping xato: {camera_name} kamera '{pump_name}' kanaliga ulangan, lekin bunday kanal yo'q."
+                    )
 
         offline_cameras = [
             name

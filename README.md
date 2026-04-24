@@ -105,7 +105,7 @@ Bu quyidagilarni tekshiradi:
 - yoqilgan kameralar
 - ESP32 javobi
 - auto spray rejimi
-- left/front/right spray mapping
+- detect kamera va spray mapping
 
 Build yoki development paytida kamera/ESP32 ulanmagan bo'lsa:
 
@@ -115,12 +115,13 @@ Build yoki development paytida kamera/ESP32 ulanmagan bo'lsa:
 
 ## Kamera va Spray Mapping
 
-Final soft arxitektura 3 ta detection kamera va 3 ta spray kanalga tayyor:
+Hozirgi default konfiguratsiya quyidagicha:
 
 ```text
-left camera  -> left pump yoki valve
-front camera -> front pump yoki valve
-right camera -> right pump yoki valve
+front camera -> flower detection
+left camera  -> operator monitoring
+right camera -> operator monitoring
+front detect -> left + right pump yoki valve
 ```
 
 Default kamera indekslari:
@@ -128,20 +129,21 @@ Default kamera indekslari:
 ```json
 [
   { "name": "front", "source": 0, "enabled": true, "detect_flowers": true },
-  { "name": "left", "source": 1, "enabled": true, "detect_flowers": true },
-  { "name": "right", "source": 2, "enabled": true, "detect_flowers": true }
+  { "name": "left", "source": 1, "enabled": true, "detect_flowers": false },
+  { "name": "right", "source": 2, "enabled": true, "detect_flowers": false }
 ]
 ```
 
 Windows kompyuterda kamera tartibi boshqacha chiqsa `config.json` ichidagi `source` qiymatlarini almashtiring. Masalan front kamera aslida `1` bo'lsa, `front.source` ni `1` qiling.
 
-ESP32 tarafida default pump pinlari:
+ESP32 tarafida hozir ishlatiladigan default pump pinlari:
 
 ```text
 left pump  -> GPIO 16
-front pump -> GPIO 23
 right pump -> GPIO 17
 ```
+
+`GPIO 23` dagi old/front chiqish firmware ichida saqlangan, lekin hozirgi default config uni ishlatmaydi. Agar keyin alohida front valve qo'shsangiz qayta yoqish mumkin.
 
 Relay modulingiz active-LOW bo'lsa `PUMP_ACTIVE_HIGH = false` holati to'g'ri. Agar relay gul topilganda teskari ishlasa `PUMP_ACTIVE_HIGH` qiymatini almashtiring.
 
@@ -189,11 +191,13 @@ Web app ichida mana bunaqa JSON kiritiladi:
 
 - Telefon va kompyuter bitta web dashboard orqali boshqaradi.
 - Telefon landscape holatda chap/o'ng va oldinga/orqaga tugmalari bilan ishlaydi.
+- `90° chap` va `90° o'ng` avtomatik burilish tugmalari bor.
 - Tugma bosib turilsa yuradi, qo'yib yuborilsa stop yuboriladi.
 - Eski kechikkan manual commandlar sequence orqali ignor qilinadi.
+- Mobil brauzerda long-press `copy/select` menyusi bloklangan.
 - 3 kamera stream oynasi mavjud.
-- 3 kamera ham flower detection va centered trigger uchun sozlangan.
-- Auto spray `left/front/right` kanalga pulse yuboradi.
+- Faqat old kamera flower detection qiladi.
+- Auto spray default holatda `left + right` kanalga pulse yuboradi.
 - Doctor va unit testlar mavjud.
 
 ## Kengaytirish yo'li

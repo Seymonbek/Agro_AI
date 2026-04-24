@@ -1,5 +1,4 @@
 const CAMERA_NAMES = ["left", "front", "right"];
-const SPRAY_ZONES = ["left", "front", "right"];
 
 if ("serviceWorker" in navigator) {
   window.addEventListener("load", () => {
@@ -13,8 +12,11 @@ const state = {
   speedLimit: 120,
   activeButtons: new Set(),
   availableCameras: new Set(),
+  availablePumpZones: new Set(),
   commandSeq: 0,
   activePage: "operator",
+  autonomyRunning: false,
+  turnBusy: false,
 };
 
 const TURN_FACTOR = 0.7;
@@ -41,6 +43,8 @@ const elements = {
   autoSprayToggle: document.getElementById("autoSprayToggle"),
   turnLeftButton: document.getElementById("turnLeftButton"),
   turnRightButton: document.getElementById("turnRightButton"),
+  turnLeft90Button: document.getElementById("turnLeft90Button"),
+  turnRight90Button: document.getElementById("turnRight90Button"),
   forwardButton: document.getElementById("forwardButton"),
   backwardButton: document.getElementById("backwardButton"),
   warningsList: document.getElementById("warningsList"),
@@ -74,6 +78,7 @@ const elements = {
   planRemainingMetric: document.getElementById("planRemainingMetric"),
   planCurrentMetric: document.getElementById("planCurrentMetric"),
   planPreview: document.getElementById("planPreview"),
+  pumpCards: Array.from(document.querySelectorAll(".spray-card")),
 };
 
 function clamp(value, min, max) {
@@ -169,6 +174,30 @@ window.addEventListener("hashchange", () => {
       : "operator";
   setPage(pageName, true);
 });
+
+function isEditableTarget(target) {
+  return target instanceof HTMLElement && Boolean(target.closest("input, textarea"));
+}
+
+function blockSelectionAndCopyUI() {
+  document.addEventListener("contextmenu", (event) => {
+    if (!isEditableTarget(event.target)) {
+      event.preventDefault();
+    }
+  }, { capture: true });
+
+  document.addEventListener("selectstart", (event) => {
+    if (!isEditableTarget(event.target)) {
+      event.preventDefault();
+    }
+  }, { capture: true });
+
+  document.addEventListener("dragstart", (event) => {
+    if (!isEditableTarget(event.target)) {
+      event.preventDefault();
+    }
+  }, { capture: true });
+}
 
 function getAxes() {
   const horizontal =
@@ -300,6 +329,35 @@ function clearDriveAndStop() {
   return postJson("/api/control/stop", { seq: nextCommandSeq() });
 }
 
+function setTurnBusy(isBusy) {
+  state.turnBusy = isBusy;
+  syncTurnButtons();
+}
+
+function syncTurnButtons() {
+  const disabled = state.turnBusy || state.autonomyRunning;
+  elements.turnLeft90Button.disabled = disabled;
+  elements.turnRight90Button.disabled = disabled;
+}
+
+async function triggerTurn90(direction) {
+  if (state.turnBusy) return;
+  setTurnBusy(true);
+  try {
+    await clearDriveAndStop();
+    const response = await postJson("/api/control/turn90", { direction });
+    if (!response.ok) {
+      elements.motionBadge.textContent = `Harakat: ${response.detail || response.error || "turn xato"}`;
+      return;
+    }
+    state.autonomyRunning = true;
+    syncTurnButtons();
+    elements.motionBadge.textContent = `Harakat: 90° ${direction === "left" ? "chap" : "o'ng"}`;
+  } finally {
+    window.setTimeout(() => setTurnBusy(false), 250);
+  }
+}
+
 attachDriveButton(elements.turnLeftButton, "left");
 attachDriveButton(elements.turnRightButton, "right");
 attachDriveButton(elements.forwardButton, "forward");
@@ -311,6 +369,14 @@ window.addEventListener("blur", () => {
 
 elements.stopButton.addEventListener("click", async () => {
   await clearDriveAndStop();
+});
+
+elements.turnLeft90Button.addEventListener("click", async () => {
+  await triggerTurn90("left");
+});
+
+elements.turnRight90Button.addEventListener("click", async () => {
+  await triggerTurn90("right");
 });
 
 elements.speedSlider.addEventListener("input", () => {
@@ -440,6 +506,15 @@ function configureCameraCards(cameraList) {
   });
 }
 
+function configurePumpCards(pumpZones) {
+  state.availablePumpZones = new Set(pumpZones);
+  elements.pumpCards.forEach((card) => {
+    const zone = card.dataset.zone;
+    const isVisible = state.availablePumpZones.has(zone);
+    card.hidden = !isVisible;
+  });
+}
+
 function cameraMeta(camera, fallback) {
   if (!camera) return fallback;
   if (!camera.online) return camera.error || "Offline";
@@ -450,8 +525,12 @@ function cameraMeta(camera, fallback) {
 }
 
 function renderPumpStates(pumps) {
-  SPRAY_ZONES.forEach((zone) => {
+  const zones = state.availablePumpZones.size
+    ? Array.from(state.availablePumpZones)
+    : Object.keys(pumps || {});
+  zones.forEach((zone) => {
     const element = elements[`${zone}PumpState`];
+    if (!element) return;
     const enabled = Boolean(pumps?.[zone]);
     element.textContent = enabled ? "ON" : "OFF";
     element.classList.toggle("pump-on", enabled);
@@ -491,6 +570,7 @@ async function loadConfig() {
     const response = await fetch("/api/config");
     const config = await response.json();
     configureCameraCards(config.cameras || []);
+    configurePumpCards(config.auto_spray?.spray_zones || []);
   } catch (error) {
     console.error("Config yuklanmadi", error);
   }
@@ -506,6 +586,11 @@ async function refreshState() {
     const spray = snapshot.spray || {};
     const autonomy = snapshot.autonomy || {};
     const cameras = snapshot.cameras || {};
+    const lastSprayTargets = Array.isArray(spray.last_pumps) && spray.last_pumps.length
+      ? spray.last_pumps.join(" + ")
+      : spray.last_pump || "-";
+    state.autonomyRunning = Boolean(autonomy.running);
+    syncTurnButtons();
 
     setBadge(
       elements.esp32Badge,
@@ -514,10 +599,12 @@ async function refreshState() {
       `ESP32: offline | ${esp32.last_error || "javob yo'q"}`
     );
     elements.esp32Metric.textContent = esp32.online ? "online" : "offline";
-    elements.modeBadge.textContent = `Mode: ${control.mode || "manual"}`;
+    elements.modeBadge.textContent = `Mode: ${autonomy.running ? "autonomy" : control.mode || "manual"}`;
     elements.autoSprayMetric.textContent = control.auto_spray ? "ON" : "OFF";
-    elements.lastSprayMetric.textContent = `${spray.last_pump || "-"} | ${spray.last_trigger_at || "-"}`;
-    elements.motionBadge.textContent = `Harakat: ${control.last_command || "stop"}`;
+    elements.lastSprayMetric.textContent = `${lastSprayTargets} | ${spray.last_trigger_at || "-"}`;
+    elements.motionBadge.textContent = autonomy.running
+      ? `Harakat: ${autonomy.current_label || autonomy.status || "autonomy"}`
+      : `Harakat: ${control.last_command || "stop"}`;
 
     CAMERA_NAMES.forEach((name) => {
       if (!state.availableCameras.has(name)) return;
@@ -546,6 +633,8 @@ async function refreshState() {
 }
 
 renderSpeed();
+blockSelectionAndCopyUI();
+syncTurnButtons();
 setPage(
   location.hash === "#diagnostics"
     ? "diagnostics"

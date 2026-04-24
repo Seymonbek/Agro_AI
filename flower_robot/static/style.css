@@ -37,6 +37,17 @@ body {
     radial-gradient(circle at 20% 0%, rgba(143, 211, 108, 0.14), transparent 30%),
     linear-gradient(135deg, #14251a, var(--bg));
   font-family: "Aptos", "Segoe UI", Verdana, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+input,
+textarea {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
 }
 
 body::before {
@@ -142,6 +153,7 @@ button {
 .turn-column {
   grid-column: 1;
   grid-row: 1 / 3;
+  grid-template-rows: repeat(4, clamp(60px, 10vh, 86px));
 }
 
 .move-column {
@@ -176,6 +188,10 @@ button {
   background: linear-gradient(180deg, #91cf73, #65a957);
 }
 
+.drive-button.turn-90 {
+  background: linear-gradient(180deg, #b6f1a3, #7cc96a);
+}
+
 .drive-button.forward {
   background: linear-gradient(180deg, #ffe98f, #e2bf54);
 }
@@ -198,6 +214,12 @@ button {
     inset 0 1px 0 rgba(255, 255, 255, 0.22),
     0 0 0 3px rgba(255, 255, 255, 0.12),
     0 8px 18px rgba(0, 0, 0, 0.28);
+}
+
+.drive-button:disabled,
+.test-pump-button:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 .camera-panel {
@@ -626,6 +648,10 @@ input[type="range"] {
     border-radius: 18px;
   }
 
+  .turn-column {
+    grid-template-rows: repeat(4, clamp(54px, 11vh, 72px));
+  }
+
   .drive-button {
     border-radius: 16px;
     font-size: clamp(1rem, 3.1vw, 1.45rem);
@@ -735,6 +761,11 @@ input[type="range"] {
     border-radius: 0;
     background: transparent;
     box-shadow: none;
+  }
+
+  .turn-column {
+    grid-template-rows: repeat(4, clamp(44px, 10vh, 58px));
+    gap: 6px;
   }
 
   .drive-button {

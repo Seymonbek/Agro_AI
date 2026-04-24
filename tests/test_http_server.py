@@ -93,13 +93,13 @@ class FlowerRobotHttpTests(unittest.TestCase):
             icon = response.read(8)
         self.assertEqual(icon, b"\x89PNG\r\n\x1a\n")
 
-    def test_front_pump_api_route(self) -> None:
+    def test_left_pump_api_route(self) -> None:
         calls: list[tuple[str, bool]] = []
         self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]
 
         request = Request(
             f"{self.base_url}/api/control/pump",
-            data=b'{"side":"front","enabled":true}',
+            data=b'{"side":"left","enabled":true}',
             headers={"Content-Type": "application/json"},
             method="POST",
         )
@@ -107,7 +107,7 @@ class FlowerRobotHttpTests(unittest.TestCase):
             body = response.read().decode("utf-8")
 
         self.assertIn('"ok": true', body)
-        self.assertEqual(calls, [("front", True)])
+        self.assertEqual(calls, [("left", True)])
 
     def test_tank_command_clamps_values(self) -> None:
         calls: list[tuple[float, float, int]] = []
@@ -133,7 +133,22 @@ class FlowerRobotHttpTests(unittest.TestCase):
         self.assertEqual(status, 400)
         self.assertIn('"error": "bad_request"', body)
 
-    def test_autonomy_plan_api_accepts_front_pump(self) -> None:
+    def test_autonomy_plan_api_accepts_available_pump(self) -> None:
+        status, body = self.post_json(
+            "/api/autonomy/plan",
+            {
+                "name": "left spray demo",
+                "speed_limit": 180,
+                "segments": [
+                    {"label": "left pump", "left": 0.0, "right": 0.0, "seconds": 0.1, "pump": "left"}
+                ],
+            },
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn('"pump": "left"', body)
+
+    def test_autonomy_plan_rejects_unavailable_pump(self) -> None:
         status, body = self.post_json(
             "/api/autonomy/plan",
             {
@@ -145,8 +160,20 @@ class FlowerRobotHttpTests(unittest.TestCase):
             },
         )
 
+        self.assertEqual(status, 400)
+        self.assertIn("ishlatib bo'lmaydigan pump", body)
+
+    def test_turn90_route_starts_left_turn(self) -> None:
+        plans = []
+        self.context.autonomy.start = lambda plan: plans.append(plan)  # type: ignore[method-assign]
+
+        status, body = self.post_json("/api/control/turn90", {"direction": "left"})
+
         self.assertEqual(status, 200)
-        self.assertIn('"pump": "front"', body)
+        self.assertIn('"direction": "left"', body)
+        self.assertEqual(len(plans), 1)
+        self.assertGreater(plans[0].segments[0].left, 0)
+        self.assertLess(plans[0].segments[0].right, 0)
 
     def test_bad_json_returns_400(self) -> None:
         request = Request(

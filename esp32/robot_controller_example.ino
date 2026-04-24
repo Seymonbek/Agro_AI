@@ -5,7 +5,7 @@
 
   Vazifalari:
   1. Ikkita BTS7960 driver orqali tank usulida harakatlantirish
-  2. 3 ta nasos/valve chiqishini boshqarish
+  2. Spray chiqishlarini boshqarish
   3. Wi-Fi Access Point ko'tarish
   4. Laptop server uchun HTTP API berish
   5. Eski /F /B /L /R /S buyruqlarini ham qo'llab-quvvatlash
@@ -14,13 +14,15 @@
   MUHIM:
   - Motor pinlari siz yuborgan kod bo'yicha qoldirildi.
   - Nasos pinlari bu yerda xavfsiz tavsiya pinlarga qo'yildi.
-    Agar hardware allaqachon boshqa pinlarga ulangan bo'lsa, shu 3 ta #define ni o'zgartiring.
-  - Default spray pinlari: left=GPIO16, front=GPIO23, right=GPIO17.
+    Agar hardware allaqachon boshqa pinlarga ulangan bo'lsa, shu #define larni o'zgartiring.
+  - Hozirgi default soft config `front` kameradan detect qilib `left + right` spray kanalini yoqadi.
+  - Firmware ichida old/front chiqish ham saqlangan: left=GPIO16, front=GPIO23, right=GPIO17.
+    Agar sizda faqat 2 ta nasos bo'lsa `front` pinni ulash shart emas.
 
   TIZIM MANTIGI:
-  - Chap kamera gul markazini topsa -> chap nasos ishlaydi
-  - Old kamera gul markazini topsa -> old/front nasos yoki valve ishlaydi
-  - O'ng kamera gul markazini topsa -> o'ng nasos ishlaydi
+  - Hozirgi default rejimda old kamera gul markazini topsa -> chap va o'ng spray ishlaydi
+  - Chap va o'ng kameralar asosan operator monitoring uchun ishlatiladi
+  - Agar keyin alohida front valve kerak bo'lsa firmware ichidagi `front` kanalni yoqish mumkin
 
   ESlATMA:
   - Bu kod ESP32 tomonidagi "bajaruvchi" qism.

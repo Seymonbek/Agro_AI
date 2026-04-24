@@ -10,11 +10,9 @@ from urllib.request import urlopen
 
 import cv2
 
-from flower_robot.config import AppSettings
+from flower_robot.config import AppSettings, SUPPORTED_PUMP_ZONES
 from flower_robot.paths import resource_path
 from flower_robot.serial_ports import resolve_serial_port, serial_port_candidates
-
-SPRAY_ZONES = {"left", "front", "right"}
 
 
 @dataclass
@@ -163,20 +161,37 @@ def run_doctor(
 
     mapping_errors = [
         f"{camera}->{pump}"
-        for camera, pump in settings.auto_spray.camera_to_pump.items()
-        if pump not in SPRAY_ZONES
+        for camera, pumps in settings.auto_spray.camera_to_pump.items()
+        for pump in pumps
+        if pump not in SUPPORTED_PUMP_ZONES
     ]
+    if mapping_errors:
+        mapping_detail = ", ".join(mapping_errors)
+    elif settings.auto_spray.pump_zones:
+        mapping_detail = ", ".join(settings.auto_spray.pump_zones)
+    else:
+        mapping_detail = "pump mapping topilmadi"
     results.append(
         CheckResult(
             name="spray-mapping",
-            ok=not mapping_errors,
-            detail=(
-                "left/front/right mapping OK"
-                if not mapping_errors
-                else ", ".join(mapping_errors)
-            ),
-            fix="camera_to_pump faqat left, front yoki right kanallariga ulanishi kerak."
-            if mapping_errors
+            ok=bool(settings.auto_spray.pump_zones) and not mapping_errors,
+            detail=mapping_detail,
+            fix="camera_to_pump ichida kamida bitta qo'llab-quvvatlanadigan kanal bo'lishi kerak: left, front yoki right."
+            if mapping_errors or not settings.auto_spray.pump_zones
+            else None,
+        )
+    )
+
+    detect_camera_names = [
+        camera.name for camera in settings.cameras if camera.enabled and camera.detect_flowers
+    ]
+    results.append(
+        CheckResult(
+            name="detect-cameras",
+            ok=bool(detect_camera_names),
+            detail=", ".join(detect_camera_names) if detect_camera_names else "enabled detect camera yo'q",
+            fix="Kamida bitta kamera detect_flowers=true bo'lishi kerak."
+            if not detect_camera_names
             else None,
         )
     )

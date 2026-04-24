@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from flower_robot.auto_spray import AutoSprayController
-from flower_robot.autonomy import MissionController, build_mission_plan
+from flower_robot.autonomy import MissionController, MissionPlan, MissionSegment, build_mission_plan
 from flower_robot.config import AppSettings
 from flower_robot.esp32_client import ESP32Client
 from flower_robot.paths import resource_path
@@ -20,7 +20,7 @@ from flower_robot.vision import VisionHub
 
 
 STATIC_ROOT = resource_path("flower_robot", "static")
-SPRAY_ZONES = {"left", "front", "right"}
+TURN_DIRECTIONS = {"left", "right"}
 
 
 class RequestJsonError(ValueError):
@@ -112,6 +112,10 @@ class RequestHandler(BaseHTTPRequestHandler):
             if path == "/api/control/auto-spray":
                 response = self.context.handle_auto_spray(payload)
                 self._send_json(HTTPStatus.OK, response)
+                return
+            if path == "/api/control/turn90":
+                response, code = self.context.handle_turn_90(payload)
+                self._send_json(code, response)
                 return
             if path == "/api/autonomy/plan":
                 response, code = self.context.preview_plan(payload)
@@ -206,7 +210,8 @@ class AppContext:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.state = RobotStateStore(settings)
-        self.esp32 = ESP32Client(settings.esp32, self.state)
+        self._pump_zones = tuple(settings.auto_spray.pump_zones)
+        self.esp32 = ESP32Client(settings.esp32, self.state, pump_zones=self._pump_zones)
         self.auto_spray = AutoSprayController(settings.auto_spray, self.esp32, self.state)
         self.vision = VisionHub(settings, self.state, detection_callback=self._handle_detection)
         self.autonomy = MissionController(self.esp32, self.state)
@@ -253,7 +258,13 @@ class AppContext:
                 "cooldown_ms": self.settings.auto_spray.cooldown_ms,
                 "center_tolerance_px": self.settings.auto_spray.center_tolerance_px,
                 "camera_to_pump": self.settings.auto_spray.camera_to_pump,
-                "spray_zones": sorted(SPRAY_ZONES),
+                "spray_zones": list(self._pump_zones),
+            },
+            "maneuvers": {
+                "turn_90_speed": self.settings.maneuvers.turn_90_speed,
+                "turn_90_speed_limit": self.settings.maneuvers.turn_90_speed_limit,
+                "turn_90_left_seconds": self.settings.maneuvers.turn_90_left_seconds,
+                "turn_90_right_seconds": self.settings.maneuvers.turn_90_right_seconds,
             },
             "cameras": [
                 {
@@ -366,7 +377,7 @@ class AppContext:
 
     def handle_pump(self, payload: dict[str, Any]) -> dict[str, Any]:
         side = str(payload.get("side", "left"))
-        if side not in SPRAY_ZONES:
+        if side not in self._pump_zones:
             return {"ok": False, "error": "invalid_pump_side"}
         enabled = self._bool_payload(payload, "enabled", False)
         self.esp32.set_pump(side, enabled)
@@ -377,9 +388,25 @@ class AppContext:
         self.state.update_control(auto_spray=enabled)
         return {"ok": True, "enabled": enabled, "firmware_mode": self.settings.esp32.firmware_mode}
 
+    def handle_turn_90(self, payload: dict[str, Any]) -> tuple[dict[str, Any], HTTPStatus]:
+        direction = str(payload.get("direction", "")).strip().lower()
+        if direction not in TURN_DIRECTIONS:
+            raise ValueError("direction left yoki right bo'lishi kerak.")
+
+        plan = self._build_turn_90_plan(direction)
+        self.autonomy.start(plan)
+        self.state.update_control(left=0.0, right=0.0, last_command=f"turn90:{direction}")
+        return {
+            "ok": True,
+            "direction": direction,
+            "message": f"{plan.name} ishga tushdi.",
+            "total_seconds": plan.total_seconds,
+        }, HTTPStatus.OK
+
     def preview_plan(self, payload: dict[str, Any]) -> tuple[dict[str, Any], HTTPStatus]:
         try:
             plan = build_mission_plan(payload, self.settings.measurements)
+            self._validate_plan_pumps(plan)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST
 
@@ -413,6 +440,7 @@ class AppContext:
 
         try:
             plan = build_mission_plan(source_payload, self.settings.measurements)
+            self._validate_plan_pumps(plan)
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": str(exc)}, HTTPStatus.BAD_REQUEST
 
@@ -430,6 +458,47 @@ class AppContext:
     def _handle_detection(self, camera_name: str, detection: Any) -> None:
         self.auto_spray.maybe_trigger(camera_name, detection)
 
+    def _build_turn_90_plan(self, direction: str) -> MissionPlan:
+        turn_speed = _clamp(float(self.settings.maneuvers.turn_90_speed), 0.15, 1.0)
+        speed_limit = int(_clamp(int(self.settings.maneuvers.turn_90_speed_limit), 0, 255))
+        if direction == "left":
+            label = "90° chapga burilish"
+            duration = max(float(self.settings.maneuvers.turn_90_left_seconds), 0.05)
+            left = turn_speed
+            right = -turn_speed
+        else:
+            label = "90° o'ngga burilish"
+            duration = max(float(self.settings.maneuvers.turn_90_right_seconds), 0.05)
+            left = -turn_speed
+            right = turn_speed
+
+        return MissionPlan(
+            name=label,
+            speed_limit=speed_limit,
+            segments=[
+                MissionSegment(
+                    label=label,
+                    left=left,
+                    right=right,
+                    duration_seconds=round(duration, 2),
+                )
+            ],
+            warnings=["90° burilish vaqt bo'yicha kalibrovka bilan ishlaydi."],
+        )
+
+    def _validate_plan_pumps(self, plan: MissionPlan) -> None:
+        invalid_pumps = sorted(
+            {
+                segment.pump
+                for segment in plan.segments
+                if segment.pump and segment.pump not in self._pump_zones
+            }
+        )
+        if invalid_pumps:
+            raise ValueError(
+                "Rejada ishlatib bo'lmaydigan pump kanali bor: " + ", ".join(invalid_pumps)
+            )
+
     def _build_notes(self) -> list[str]:
         notes = [
             "Chel ustidan yurish konfiguratsiyasi real hardware geometriyasiga moslanadi.",
@@ -437,7 +506,7 @@ class AppContext:
             "Laptopdagi local server telefon brauzeridan ochiladi, cloud server shart emas.",
         ]
         if self.settings.esp32.firmware_mode == "advanced":
-            notes.append("Auto spray yoqilsa left/front/right kamera markazga tushgan gul uchun mos kanalga pulse yuboriladi.")
+            notes.append("Auto spray yoqilsa detect qiluvchi kamera markazga tushgan gul uchun configdagi spray kanal(lar)iga pulse yuboriladi.")
         if self.settings.esp32.transport == "serial":
             notes.append(f"ESP32 USB serial orqali ulanadi: {self.settings.esp32.serial_port}.")
         return notes
