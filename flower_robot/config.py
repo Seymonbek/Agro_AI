@@ -44,13 +44,22 @@ class MeasurementsConfig:
 @dataclass
 class VisionConfig:
     model_path: str = "yolov8s-world.pt"
-    confidence: float = 0.3
-    imgsz: int = 160
-    detect_every_n_frames: int = 3
+    confidence: float = 0.22
+    imgsz: int = 320
+    detect_every_n_frames: int = 2
+    detection_min_interval_sec: float = 0.5
+    detection_classes: list[str] = field(
+        default_factory=lambda: ["flower", "artificial plant"]
+    )
+    center_crop_fallback: bool = False
+    center_crop_ratio: float = 0.72
+    fallback_confidence: float = 0.16
     stream_width: int = 480
     stream_height: int = 360
-    capture_fps: int = 15
-    stale_frame_grabs: int = 2
+    capture_fps: int = 10
+    capture_fourcc: str = "MJPG"
+    stale_frame_grabs: int = 0
+    reopen_after_failures: int = 3
     jpeg_quality: int = 72
 
 
@@ -76,10 +85,15 @@ class AutoSprayConfig:
 
 @dataclass
 class ManeuverConfig:
-    turn_90_speed: float = 0.45
+    turn_90_speed: float = 0.55
     turn_90_speed_limit: int = 180
     turn_90_left_seconds: float = 1.1
     turn_90_right_seconds: float = 1.1
+    turn_90_left_trim: float = 1.0
+    turn_90_right_trim: float = 1.0
+    turn_90_ramp_compensation_sec: float = 0.12
+    manual_turn_min_speed_limit: int = 180
+    manual_turn_deadband: float = 0.05
 
 
 @dataclass
@@ -122,13 +136,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "vision": {
         "model_path": "yolov8s-world.pt",
-        "confidence": 0.3,
-        "imgsz": 160,
-        "detect_every_n_frames": 3,
+        "confidence": 0.22,
+        "imgsz": 320,
+        "detect_every_n_frames": 2,
+        "detection_min_interval_sec": 0.5,
+        "detection_classes": ["flower", "artificial plant"],
+        "center_crop_fallback": False,
+        "center_crop_ratio": 0.72,
+        "fallback_confidence": 0.16,
         "stream_width": 480,
         "stream_height": 360,
-        "capture_fps": 15,
-        "stale_frame_grabs": 2,
+        "capture_fps": 10,
+        "capture_fourcc": "MJPG",
+        "stale_frame_grabs": 0,
+        "reopen_after_failures": 3,
         "jpeg_quality": 72,
     },
     "auto_spray": {
@@ -139,15 +160,20 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "camera_to_pump": {"front": ["left", "right"]},
     },
     "maneuvers": {
-        "turn_90_speed": 0.45,
+        "turn_90_speed": 0.55,
         "turn_90_speed_limit": 180,
         "turn_90_left_seconds": 1.1,
         "turn_90_right_seconds": 1.1,
+        "turn_90_left_trim": 1.0,
+        "turn_90_right_trim": 1.0,
+        "turn_90_ramp_compensation_sec": 0.12,
+        "manual_turn_min_speed_limit": 180,
+        "manual_turn_deadband": 0.05,
     },
     "cameras": [
-        {"name": "front", "source": 0, "enabled": True, "detect_flowers": True},
-        {"name": "left", "source": 1, "enabled": True, "detect_flowers": False},
-        {"name": "right", "source": 2, "enabled": True, "detect_flowers": False},
+        {"name": "front", "source": "external:0", "enabled": True, "detect_flowers": True},
+        {"name": "left", "source": "external:1", "enabled": True, "detect_flowers": False},
+        {"name": "right", "source": "external:2", "enabled": True, "detect_flowers": False},
     ],
 }
 

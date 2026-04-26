@@ -46,6 +46,16 @@ class FlowerRobotHttpTests(unittest.TestCase):
         except HTTPError as exc:
             return exc.code, exc.read().decode("utf-8")
 
+    @staticmethod
+    def expired_command_payload(**values: object) -> dict[str, object]:
+        now_ms = int(time.time() * 1000)
+        return {
+            **values,
+            "client_sent_at_ms": now_ms - 2500,
+            "expires_at_ms": now_ms - 1000,
+            "ttl_ms": 500,
+        }
+
     def test_api_config_route(self) -> None:
         with urlopen(f"{self.base_url}/api/config", timeout=3) as response:
             body = response.read().decode("utf-8")
@@ -109,6 +119,116 @@ class FlowerRobotHttpTests(unittest.TestCase):
         self.assertIn('"ok": true', body)
         self.assertEqual(calls, [("left", True)])
 
+    def test_pump_test_auto_off_turns_pump_off_without_second_request(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]
+
+        status, body = self.post_json(
+            "/api/control/pump",
+            {"side": "left", "enabled": True, "auto_off_ms": 50},
+        )
+        time.sleep(0.12)
+
+        self.assertEqual(status, 200)
+        self.assertIn('"auto_off_ms": 50', body)
+        self.assertEqual(calls, [("left", True), ("left", False)])
+
+    def test_manual_spray_hold_sets_and_clears_configured_pumps(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]
+
+        status, body = self.post_json("/api/control/spray", {"enabled": True})
+
+        self.assertEqual(status, 200)
+        self.assertIn('"ok": true', body)
+        self.assertIn('"enabled": true', body)
+        self.assertIn('"left"', body)
+        self.assertIn('"right"', body)
+        self.assertEqual(calls, [("left", True), ("right", True)])
+        control = self.context.state.snapshot()["control"]
+        self.assertTrue(control["manual_spray"])
+        self.assertEqual(control["manual_spray_pumps"], ["left", "right"])
+
+        status, body = self.post_json("/api/control/spray", {"enabled": False})
+
+        self.assertEqual(status, 200)
+        self.assertIn('"enabled": false', body)
+        self.assertEqual(
+            calls,
+            [("left", True), ("right", True), ("left", False), ("right", False)],
+        )
+        control = self.context.state.snapshot()["control"]
+        self.assertFalse(control["manual_spray"])
+        self.assertEqual(control["manual_spray_pumps"], [])
+        snapshot = self.context.state.snapshot()["spray"]
+        self.assertEqual(snapshot["last_camera"], "manual")
+        self.assertEqual(snapshot["last_pumps"], ["left", "right"])
+
+    def test_manual_spray_watchdog_turns_off_when_heartbeat_stops(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]
+
+        self.context.handle_manual_spray({"enabled": True})
+        self.context._manual_spray_last_seen = time.monotonic() - 3.0  # type: ignore[attr-defined]
+        self.context._expire_manual_spray_if_needed(time.monotonic())  # type: ignore[attr-defined]
+
+        self.assertEqual(
+            calls,
+            [("left", True), ("right", True), ("left", False), ("right", False)],
+        )
+        control = self.context.state.snapshot()["control"]
+        self.assertFalse(control["manual_spray"])
+        self.assertEqual(control["last_command"], "manual_spray_timeout")
+
+    def test_expired_tank_command_is_ignored(self) -> None:
+        calls: list[tuple[float, float, int]] = []
+
+        def fake_drive(left: float, right: float, speed_limit: int) -> str:
+            calls.append((left, right, speed_limit))
+            return "fake"
+
+        self.context.esp32.drive_tank = fake_drive  # type: ignore[method-assign]
+
+        status, body = self.post_json(
+            "/api/control/tank",
+            self.expired_command_payload(left=1.0, right=1.0, speed_limit=120, seq=1),
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn('"ignored": "expired_command"', body)
+        self.assertEqual(calls, [])
+
+    def test_expired_manual_spray_on_is_ignored(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]
+
+        status, body = self.post_json(
+            "/api/control/spray",
+            self.expired_command_payload(enabled=True, seq=1),
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn('"ignored": "expired_command"', body)
+        self.assertEqual(calls, [])
+        self.assertFalse(self.context.state.snapshot()["control"]["manual_spray"])
+
+    def test_stale_sequence_is_ignored_across_control_commands(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_speed_limit = lambda speed: None  # type: ignore[method-assign]
+        self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]
+
+        status, body = self.post_json("/api/control/speed", {"speed_limit": 150, "seq": 8})
+        self.assertEqual(status, 200)
+
+        status, body = self.post_json(
+            "/api/control/pump",
+            {"side": "left", "enabled": True, "seq": 7},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn('"ignored": "stale_seq"', body)
+        self.assertEqual(calls, [])
+
     def test_tank_command_clamps_values(self) -> None:
         calls: list[tuple[float, float, int]] = []
 
@@ -126,6 +246,44 @@ class FlowerRobotHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('"applied": "fake"', body)
         self.assertEqual(calls, [(1.0, -1.0, 255)])
+
+    def test_low_speed_turn_uses_minimum_turn_torque(self) -> None:
+        calls: list[tuple[float, float, int]] = []
+
+        def fake_drive(left: float, right: float, speed_limit: int) -> str:
+            calls.append((left, right, speed_limit))
+            return "fake"
+
+        self.context.esp32.drive_tank = fake_drive  # type: ignore[method-assign]
+        self.context.settings.maneuvers.manual_turn_min_speed_limit = 95
+
+        status, body = self.post_json(
+            "/api/control/tank",
+            {"left": 0.7, "right": -0.7, "speed_limit": 35, "seq": 2},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn('"effective_speed_limit": 95', body)
+        self.assertEqual(calls, [(0.7, -0.7, 95)])
+        self.assertEqual(self.context.state.snapshot()["control"]["speed_limit"], 35)
+
+    def test_low_speed_straight_drive_does_not_boost_speed(self) -> None:
+        calls: list[tuple[float, float, int]] = []
+
+        def fake_drive(left: float, right: float, speed_limit: int) -> str:
+            calls.append((left, right, speed_limit))
+            return "fake"
+
+        self.context.esp32.drive_tank = fake_drive  # type: ignore[method-assign]
+
+        status, body = self.post_json(
+            "/api/control/tank",
+            {"left": 0.5, "right": 0.5, "speed_limit": 35, "seq": 3},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn('"effective_speed_limit": 35', body)
+        self.assertEqual(calls, [(0.5, 0.5, 35)])
 
     def test_invalid_boolean_returns_400(self) -> None:
         status, body = self.post_json("/api/control/auto-spray", {"enabled": "maybe"})
@@ -174,6 +332,62 @@ class FlowerRobotHttpTests(unittest.TestCase):
         self.assertEqual(len(plans), 1)
         self.assertGreater(plans[0].segments[0].left, 0)
         self.assertLess(plans[0].segments[0].right, 0)
+
+    def test_turn90_route_applies_trim_and_ramp_compensation(self) -> None:
+        plans = []
+        self.context.autonomy.start = lambda plan: plans.append(plan)  # type: ignore[method-assign]
+        self.context.settings.maneuvers.turn_90_right_seconds = 1.2
+        self.context.settings.maneuvers.turn_90_right_trim = 1.1
+        self.context.settings.maneuvers.turn_90_ramp_compensation_sec = 0.15
+
+        status, body = self.post_json("/api/control/turn90", {"direction": "right"})
+
+        self.assertEqual(status, 200)
+        self.assertIn('"direction": "right"', body)
+        self.assertEqual(len(plans), 1)
+        self.assertAlmostEqual(plans[0].segments[0].duration_seconds, 1.47, places=2)
+
+    def test_expired_turn90_command_is_ignored(self) -> None:
+        plans = []
+        self.context.autonomy.start = lambda plan: plans.append(plan)  # type: ignore[method-assign]
+
+        status, body = self.post_json(
+            "/api/control/turn90",
+            self.expired_command_payload(direction="left", seq=1),
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn('"ignored": "expired_command"', body)
+        self.assertEqual(plans, [])
+
+    def test_turn90_ignores_stale_manual_drive_while_running(self) -> None:
+        drive_calls: list[tuple[float, float, int]] = []
+
+        def fake_start(plan) -> None:  # type: ignore[no-untyped-def]
+            self.context.state.update_autonomy(
+                running=True,
+                status="running",
+                current_label=plan.name,
+            )
+
+        def fake_drive(left: float, right: float, speed_limit: int) -> str:
+            drive_calls.append((left, right, speed_limit))
+            return "fake"
+
+        self.context.autonomy.start = fake_start  # type: ignore[method-assign]
+        self.context.esp32.drive_tank = fake_drive  # type: ignore[method-assign]
+
+        status, body = self.post_json("/api/control/turn90", {"direction": "left"})
+        self.assertEqual(status, 200)
+
+        status, body = self.post_json(
+            "/api/control/tank",
+            {"left": 1.0, "right": 1.0, "speed_limit": 120, "seq": 10},
+        )
+
+        self.assertEqual(status, 200)
+        self.assertIn('"ignored": "turn90_running"', body)
+        self.assertEqual(drive_calls, [])
 
     def test_bad_json_returns_400(self) -> None:
         request = Request(

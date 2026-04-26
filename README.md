@@ -124,17 +124,21 @@ right camera -> operator monitoring
 front detect -> left + right pump yoki valve
 ```
 
-Default kamera indekslari:
+Default kamera sozlamasi laptopning ichki kamerasini chetlab, 3 ta tashqi USB
+kamerani ishlatadi:
 
 ```json
 [
-  { "name": "front", "source": 0, "enabled": true, "detect_flowers": true },
-  { "name": "left", "source": 1, "enabled": true, "detect_flowers": false },
-  { "name": "right", "source": 2, "enabled": true, "detect_flowers": false }
+  { "name": "front", "source": "external:0", "enabled": true, "detect_flowers": true },
+  { "name": "left", "source": "external:1", "enabled": true, "detect_flowers": false },
+  { "name": "right", "source": "external:2", "enabled": true, "detect_flowers": false }
 ]
 ```
 
-Windows kompyuterda kamera tartibi boshqacha chiqsa `config.json` ichidagi `source` qiymatlarini almashtiring. Masalan front kamera aslida `1` bo'lsa, `front.source` ni `1` qiling.
+Windowsda `external:0`, `external:1`, `external:2` odatda `1`, `2`, `3`
+indekslarga moslanadi, ya'ni `0` bo'ladigan laptop ichki kamerasi ishlatilmaydi.
+Kamera joylari almashib qolsa `config.json` ichidagi `external:0/1/2` qiymatlarini
+front/left/right orasida almashtiring.
 
 ESP32 tarafida hozir ishlatiladigan default pump pinlari:
 

@@ -101,7 +101,7 @@ int scaleToPwm(float valueNormalized) {
   }
 
   int pwm = (int)(magnitude * speedLimit);
-  if (speedLimit >= MIN_EFFECTIVE_PWM && pwm > 0 && pwm < MIN_EFFECTIVE_PWM) {
+  if (pwm > 0 && pwm < MIN_EFFECTIVE_PWM) {
     pwm = MIN_EFFECTIVE_PWM;
   }
   return constrain(pwm, 0, 255);

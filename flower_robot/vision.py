@@ -9,6 +9,7 @@ from typing import Any
 import cv2
 import numpy as np
 
+from flower_robot.camera_sources import resolve_camera_source
 from flower_robot.config import AppSettings, CameraConfig
 from flower_robot.state import RobotStateStore
 
@@ -52,7 +53,7 @@ class DetectionEngine:
 
         try:
             self._model = YOLOWorld(str(model_path))
-            self._model.set_classes(["flower", "artificial plant"])
+            self._model.set_classes(settings.vision.detection_classes)
             self._enabled = True
         except Exception as exc:  # noqa: BLE001
             self._error = str(exc)
@@ -76,28 +77,96 @@ class DetectionEngine:
         detections: list[dict[str, Any]] = []
         centered_detection: dict[str, Any] | None = None
         best_detection: dict[str, Any] | None = None
-        with self._lock:
-            results = self._model.predict(
+
+        detections.extend(
+            self._annotate_results(
                 view,
-                conf=self._settings.vision.confidence,
+                self._predict(view, self._settings.vision.confidence),
+                offset_x=0,
+                offset_y=0,
+                source="full",
+            )
+        )
+
+        if not detections and self._settings.vision.center_crop_fallback:
+            crop, offset_x, offset_y = self._center_crop(view)
+            if crop.size:
+                detections.extend(
+                    self._annotate_results(
+                        view,
+                        self._predict(crop, self._settings.vision.fallback_confidence),
+                        offset_x=offset_x,
+                        offset_y=offset_y,
+                        source="center",
+                    )
+                )
+
+        if not detections:
+            return view, DetectionResult(detections=0, last_detection=None, centered_detection=None)
+
+        for detection in detections:
+            if best_detection is None or detection["confidence"] > best_detection["confidence"]:
+                best_detection = detection
+            if detection["centered"] and centered_detection is None:
+                centered_detection = detection
+
+        last_detection = centered_detection or best_detection
+        return view, DetectionResult(
+            detections=len(detections),
+            last_detection=last_detection,
+            centered_detection=centered_detection,
+        )
+
+    def _predict(self, image: np.ndarray, confidence: float) -> list[Any]:
+        with self._lock:
+            return self._model.predict(
+                image,
+                conf=confidence,
                 imgsz=self._settings.vision.imgsz,
                 verbose=False,
                 half=False,
             )
 
-        if not results:
-            return view, DetectionResult(detections=0, last_detection=None, centered_detection=None)
+    def _center_crop(self, view: np.ndarray) -> tuple[np.ndarray, int, int]:
+        ratio = min(max(float(self._settings.vision.center_crop_ratio), 0.35), 0.95)
+        height, width = view.shape[:2]
+        crop_width = max(int(width * ratio), 1)
+        crop_height = max(int(height * ratio), 1)
+        x1 = max((width - crop_width) // 2, 0)
+        y1 = max((height - crop_height) // 2, 0)
+        x2 = min(x1 + crop_width, width)
+        y2 = min(y1 + crop_height, height)
+        return view[y1:y2, x1:x2], x1, y1
 
+    def _annotate_results(
+        self,
+        view: np.ndarray,
+        results: list[Any],
+        offset_x: int,
+        offset_y: int,
+        source: str,
+    ) -> list[dict[str, Any]]:
+        if not results:
+            return []
+
+        class_names = self._class_names(results[0])
+        center_x = view.shape[1] // 2
+        detections: list[dict[str, Any]] = []
         for box in results[0].boxes:
-            x1, y1, x2, y2 = [int(value) for value in box.xyxy[0].tolist()]
+            raw_x1, raw_y1, raw_x2, raw_y2 = [int(value) for value in box.xyxy[0].tolist()]
+            x1 = max(raw_x1 + offset_x, 0)
+            y1 = max(raw_y1 + offset_y, 0)
+            x2 = min(raw_x2 + offset_x, view.shape[1] - 1)
+            y2 = min(raw_y2 + offset_y, view.shape[0] - 1)
             conf = float(box.conf[0]) if box.conf is not None else 0.0
+            class_name = self._box_label(box, class_names)
             object_center = int((x1 + x2) / 2)
             offset = object_center - center_x
             is_centered = abs(offset) < self._settings.auto_spray.center_tolerance_px
             color = (75, 211, 164) if is_centered else (248, 113, 113)
             cv2.rectangle(view, (x1, y1), (x2, y2), color, 2)
             cv2.circle(view, (object_center, int((y1 + y2) / 2)), 5, color, -1)
-            label = f"flower {conf:.2f}"
+            label = f"{class_name} {conf:.2f}"
             cv2.putText(
                 view,
                 label,
@@ -109,24 +178,34 @@ class DetectionEngine:
             )
             detections.append(
                 {
-                    "label": "flower",
+                    "label": class_name,
                     "confidence": round(conf, 2),
                     "offset_px": int(offset),
                     "centered": is_centered,
+                    "source": source,
+                    "bbox": [int(x1), int(y1), int(x2), int(y2)],
                 }
             )
-            detection = detections[-1]
-            if best_detection is None or detection["confidence"] > best_detection["confidence"]:
-                best_detection = detection
-            if is_centered and centered_detection is None:
-                centered_detection = detection
+        return detections
 
-        last_detection = centered_detection or best_detection
-        return view, DetectionResult(
-            detections=len(detections),
-            last_detection=last_detection,
-            centered_detection=centered_detection,
-        )
+    def _class_names(self, result: Any) -> dict[int, str]:
+        names = getattr(result, "names", None) or getattr(self._model, "names", None)
+        if isinstance(names, dict):
+            return {int(key): str(value) for key, value in names.items()}
+        if isinstance(names, list):
+            return {index: str(value) for index, value in enumerate(names)}
+        return {index: value for index, value in enumerate(self._settings.vision.detection_classes)}
+
+    @staticmethod
+    def _box_label(box: Any, names: dict[int, str]) -> str:
+        cls = getattr(box, "cls", None)
+        if cls is None:
+            return "flower"
+        try:
+            class_index = int(cls[0])
+        except (TypeError, ValueError, IndexError):
+            return "flower"
+        return names.get(class_index, "flower")
 
 
 class NullDetectionEngine:
@@ -157,10 +236,13 @@ class CameraWorker:
         self._detector = detector
         self._detection_callback = detection_callback
         self._frame_lock = threading.Lock()
+        self._detection_lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._latest_jpeg = self._encode_placeholder("Starting...", "Kamera ishga tushmoqda")
         self._last_detection = DetectionResult(detections=0, last_detection=None, centered_detection=None)
+        self._detection_busy = False
+        self._last_detection_started_at = 0.0
 
     def start(self) -> None:
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -176,7 +258,14 @@ class CameraWorker:
             return self._latest_jpeg
 
     def _open_capture(self) -> cv2.VideoCapture:
-        capture = cv2.VideoCapture(self.camera.source)
+        source = resolve_camera_source(self.camera.source)
+        if isinstance(source, str) and source.startswith("/dev/"):
+            capture = cv2.VideoCapture(source, cv2.CAP_V4L2)
+        else:
+            capture = cv2.VideoCapture(source)
+        fourcc = self._settings.vision.capture_fourcc.strip()
+        if fourcc:
+            capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*fourcc[:4]))
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._settings.vision.stream_width)
         capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._settings.vision.stream_height)
@@ -208,6 +297,65 @@ class CameraWorker:
         )
         success, buffer = cv2.imencode(".jpg", frame)
         return buffer.tobytes() if success else b""
+
+    def _should_start_detection(self, frame_number: int) -> bool:
+        if not self.camera.detect_flowers or not self._detector.enabled:
+            return False
+        if frame_number % max(self._settings.vision.detect_every_n_frames, 1) != 0:
+            return False
+
+        now = time.monotonic()
+        min_interval = max(float(self._settings.vision.detection_min_interval_sec), 0.0)
+        with self._detection_lock:
+            if self._detection_busy or (now - self._last_detection_started_at) < min_interval:
+                return False
+            self._detection_busy = True
+            self._last_detection_started_at = now
+        return True
+
+    def _start_detection(self, frame: np.ndarray) -> None:
+        worker = threading.Thread(target=self._run_detection, args=(frame,), daemon=True)
+        worker.start()
+
+    def _run_detection(self, frame: np.ndarray) -> None:
+        try:
+            _, detection = self._detector.annotate(frame)
+            self._last_detection = detection
+            if self._detection_callback is not None:
+                try:
+                    self._detection_callback(self.camera.name, detection)
+                except Exception:
+                    pass
+        finally:
+            with self._detection_lock:
+                self._detection_busy = False
+
+    def _draw_detection_overlay(self, view: np.ndarray) -> None:
+        detection = self._last_detection.last_detection
+        if not detection:
+            return
+        bbox = detection.get("bbox")
+        if not isinstance(bbox, list) or len(bbox) != 4:
+            return
+        try:
+            x1, y1, x2, y2 = [int(value) for value in bbox]
+        except (TypeError, ValueError):
+            return
+
+        is_centered = bool(detection.get("centered"))
+        color = (75, 211, 164) if is_centered else (248, 113, 113)
+        label = f"{detection.get('label', 'flower')} {float(detection.get('confidence', 0.0)):.2f}"
+        cv2.rectangle(view, (x1, y1), (x2, y2), color, 2)
+        cv2.circle(view, (int((x1 + x2) / 2), int((y1 + y2) / 2)), 5, color, -1)
+        cv2.putText(
+            view,
+            label,
+            (x1, max(20, y1 - 10)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            color,
+            2,
+        )
 
     def _run_demo(self) -> None:
         width = self._settings.vision.stream_width
@@ -290,6 +438,8 @@ class CameraWorker:
         frames_since_tick = 0
         fps = 0.0
         frame_number = 0
+        consecutive_failures = 0
+        reopen_after_failures = max(int(self._settings.vision.reopen_after_failures), 1)
 
         while not self._stop_event.is_set():
             if not capture.isOpened():
@@ -308,6 +458,7 @@ class CameraWorker:
 
             ok, frame = self._read_latest_frame(capture)
             if not ok:
+                consecutive_failures += 1
                 self._state.update_camera(
                     self.camera.name,
                     online=False,
@@ -316,9 +467,15 @@ class CameraWorker:
                 )
                 with self._frame_lock:
                     self._latest_jpeg = self._encode_placeholder("Signal yo'q", "USB yoki kabelni tekshiring")
+                if consecutive_failures >= reopen_after_failures:
+                    capture.release()
+                    time.sleep(0.4)
+                    capture = self._open_capture()
+                    consecutive_failures = 0
                 time.sleep(1.0)
                 continue
 
+            consecutive_failures = 0
             frame_number += 1
             frames_since_tick += 1
             view = cv2.resize(
@@ -326,25 +483,17 @@ class CameraWorker:
                 (self._settings.vision.stream_width, self._settings.vision.stream_height),
             )
 
-            if (
-                self.camera.detect_flowers
-                and self._detector.enabled
-                and frame_number % max(self._settings.vision.detect_every_n_frames, 1) == 0
-            ):
-                view, self._last_detection = self._detector.annotate(view)
-                if self._detection_callback is not None:
-                    try:
-                        self._detection_callback(self.camera.name, self._last_detection)
-                    except Exception:
-                        pass
-            else:
-                cv2.line(
-                    view,
-                    (view.shape[1] // 2, 0),
-                    (view.shape[1] // 2, view.shape[0]),
-                    (255, 214, 102),
-                    2,
-                )
+            if self._should_start_detection(frame_number):
+                self._start_detection(view.copy())
+
+            cv2.line(
+                view,
+                (view.shape[1] // 2, 0),
+                (view.shape[1] // 2, view.shape[0]),
+                (255, 214, 102),
+                2,
+            )
+            self._draw_detection_overlay(view)
 
             now = time.monotonic()
             if now - last_fps_tick >= 1.0:

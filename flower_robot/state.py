@@ -22,6 +22,8 @@ class RobotStateStore:
                 "speed_limit": 120,
                 "last_command": "stop",
                 "auto_spray": settings.auto_spray.default_enabled,
+                "manual_spray": False,
+                "manual_spray_pumps": [],
             },
             "esp32": {
                 "online": False,

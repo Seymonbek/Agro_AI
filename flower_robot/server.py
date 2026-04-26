@@ -21,6 +21,10 @@ from flower_robot.vision import VisionHub
 
 STATIC_ROOT = resource_path("flower_robot", "static")
 TURN_DIRECTIONS = {"left", "right"}
+COMMAND_TTL_MS = 1200
+MAX_COMMAND_TTL_MS = 5000
+MAX_FUTURE_COMMAND_SKEW_MS = 2000
+MANUAL_SPRAY_HOLD_TIMEOUT_SEC = 1.4
 
 
 class RequestJsonError(ValueError):
@@ -109,6 +113,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 response = self.context.handle_pump(payload)
                 self._send_json(HTTPStatus.OK, response)
                 return
+            if path == "/api/control/spray":
+                response = self.context.handle_manual_spray(payload)
+                self._send_json(HTTPStatus.OK, response)
+                return
             if path == "/api/control/auto-spray":
                 response = self.context.handle_auto_spray(payload)
                 self._send_json(HTTPStatus.OK, response)
@@ -126,7 +134,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self._send_json(code, response)
                 return
             if path == "/api/autonomy/stop":
-                response = self.context.stop_plan()
+                response = self.context.stop_plan(payload)
                 self._send_json(HTTPStatus.OK, response)
                 return
         except ValueError as exc:
@@ -219,6 +227,11 @@ class AppContext:
         self._monitor_thread: threading.Thread | None = None
         self._manual_seq_lock = threading.Lock()
         self._latest_manual_seq = -1
+        self._turn_manual_lock_until = 0.0
+        self._manual_spray_lock = threading.Lock()
+        self._manual_spray_active = False
+        self._manual_spray_pumps: tuple[str, ...] = ()
+        self._manual_spray_last_seen = 0.0
 
     def start_background_tasks(self) -> None:
         self.vision.start()
@@ -231,14 +244,21 @@ class AppContext:
         self.vision.stop()
 
     def _monitor_loop(self) -> None:
+        next_status_poll = 0.0
         while not self._monitor_stop.is_set():
-            self.esp32.poll_status()
-            self.state.set_notes(self._build_notes())
-            self._monitor_stop.wait(2.0)
+            now = time.monotonic()
+            self._expire_manual_spray_if_needed(now)
+            if now >= next_status_poll:
+                self.esp32.poll_status()
+                self.state.set_notes(self._build_notes())
+                next_status_poll = now + 2.0
+            self._monitor_stop.wait(0.1)
 
     def public_config(self) -> dict[str, Any]:
         return {
             "server": {"host": self.settings.server.host, "port": self.settings.server.port},
+            "server_time_ms": int(time.time() * 1000),
+            "command_ttl_ms": COMMAND_TTL_MS,
             "esp32": {
                 "transport": self.settings.esp32.transport,
                 "base_url": self.settings.esp32.base_url,
@@ -265,6 +285,11 @@ class AppContext:
                 "turn_90_speed_limit": self.settings.maneuvers.turn_90_speed_limit,
                 "turn_90_left_seconds": self.settings.maneuvers.turn_90_left_seconds,
                 "turn_90_right_seconds": self.settings.maneuvers.turn_90_right_seconds,
+                "turn_90_left_trim": self.settings.maneuvers.turn_90_left_trim,
+                "turn_90_right_trim": self.settings.maneuvers.turn_90_right_trim,
+                "turn_90_ramp_compensation_sec": self.settings.maneuvers.turn_90_ramp_compensation_sec,
+                "manual_turn_min_speed_limit": self.settings.maneuvers.manual_turn_min_speed_limit,
+                "manual_turn_deadband": self.settings.maneuvers.manual_turn_deadband,
             },
             "cameras": [
                 {
@@ -289,10 +314,66 @@ class AppContext:
             return True, None
 
         with self._manual_seq_lock:
-            if seq < self._latest_manual_seq:
+            if seq <= self._latest_manual_seq:
                 return False, seq
             self._latest_manual_seq = seq
         return True, seq
+
+    def _ignore_stale_realtime_command(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        expired = self._expired_command_response(payload)
+        if expired:
+            return expired
+
+        accepted, seq = self._accept_manual_seq(payload)
+        if not accepted:
+            return {"ok": True, "ignored": "stale_seq", "seq": seq}
+        return None
+
+    def _expired_command_response(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        has_expiry = "expires_at_ms" in payload
+        has_sent_at = "client_sent_at_ms" in payload
+        if not has_expiry and not has_sent_at:
+            return None
+
+        now_ms = int(time.time() * 1000)
+        ttl_ms = int(
+            _clamp(
+                self._int_payload(payload, "ttl_ms", COMMAND_TTL_MS),
+                100,
+                MAX_COMMAND_TTL_MS,
+            )
+        )
+
+        sent_at_ms: float | None = None
+        if has_sent_at:
+            sent_at_ms = self._float_payload(payload, "client_sent_at_ms", now_ms)
+            if sent_at_ms > now_ms + MAX_FUTURE_COMMAND_SKEW_MS:
+                return {
+                    "ok": True,
+                    "ignored": "future_command",
+                    "seq": payload.get("seq"),
+                }
+
+        if has_expiry:
+            expires_at_ms = self._float_payload(payload, "expires_at_ms", now_ms)
+            if sent_at_ms is not None:
+                expires_at_ms = min(expires_at_ms, sent_at_ms + ttl_ms)
+        elif sent_at_ms is not None:
+            expires_at_ms = sent_at_ms + ttl_ms
+        else:
+            expires_at_ms = now_ms + ttl_ms
+
+        if now_ms > expires_at_ms:
+            response: dict[str, Any] = {
+                "ok": True,
+                "ignored": "expired_command",
+                "seq": payload.get("seq"),
+                "expired_by_ms": int(now_ms - expires_at_ms),
+            }
+            if sent_at_ms is not None:
+                response["age_ms"] = int(now_ms - sent_at_ms)
+            return response
+        return None
 
     @staticmethod
     def _float_payload(payload: dict[str, Any], key: str, default: float) -> float:
@@ -326,13 +407,13 @@ class AppContext:
         raise ValueError(f"{key} true/false bo'lishi kerak.")
 
     def handle_tank_command(self, payload: dict[str, Any]) -> dict[str, Any]:
-        accepted, seq = self._accept_manual_seq(payload)
-        if not accepted:
-            return {"ok": True, "ignored": "stale", "seq": seq}
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored
 
         left = _clamp(self._float_payload(payload, "left", 0.0), -1.0, 1.0)
         right = _clamp(self._float_payload(payload, "right", 0.0), -1.0, 1.0)
-        speed_limit = int(
+        requested_speed_limit = int(
             _clamp(
                 self._int_payload(
                     payload,
@@ -343,31 +424,54 @@ class AppContext:
                 255,
             )
         )
+        effective_speed_limit = self._effective_manual_speed_limit(
+            left,
+            right,
+            requested_speed_limit,
+        )
 
         if self.state.snapshot()["autonomy"]["running"]:
+            if self._turn_manual_locked():
+                return {
+                    "ok": True,
+                    "ignored": "turn90_running",
+                    "speed_limit": requested_speed_limit,
+                    "effective_speed_limit": effective_speed_limit,
+                }
             self.autonomy.stop("manual override")
 
-        mode = self.esp32.drive_tank(left, right, speed_limit)
+        mode = self.esp32.drive_tank(left, right, effective_speed_limit)
         self.state.update_control(
             mode="manual",
             left=round(left, 3),
             right=round(right, 3),
-            speed_limit=speed_limit,
+            speed_limit=requested_speed_limit,
             last_command=mode,
         )
-        return {"ok": True, "applied": mode}
+        return {
+            "ok": True,
+            "applied": mode,
+            "speed_limit": requested_speed_limit,
+            "effective_speed_limit": effective_speed_limit,
+        }
 
     def handle_stop(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        accepted, seq = self._accept_manual_seq(payload or {})
-        if not accepted:
-            return {"ok": True, "ignored": "stale", "seq": seq}
+        ignored = self._ignore_stale_realtime_command(payload or {})
+        if ignored:
+            return ignored
 
         self.autonomy.stop("manual stop")
+        self._turn_manual_lock_until = 0.0
+        self._clear_manual_spray_state()
         self.esp32.stop()
         self.state.update_control(left=0.0, right=0.0, last_command="stop", mode="manual")
         return {"ok": True}
 
     def handle_speed(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored
+
         speed_limit = int(
             _clamp(self._int_payload(payload, "speed_limit", payload.get("value", 120)), 0, 255)
         )
@@ -376,24 +480,89 @@ class AppContext:
         return {"ok": True, "speed_limit": speed_limit}
 
     def handle_pump(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored
+
         side = str(payload.get("side", "left"))
         if side not in self._pump_zones:
             return {"ok": False, "error": "invalid_pump_side"}
         enabled = self._bool_payload(payload, "enabled", False)
         self.esp32.set_pump(side, enabled)
-        return {"ok": True, "side": side, "enabled": enabled}
+        auto_off_ms = int(
+            _clamp(self._int_payload(payload, "auto_off_ms", 0), 0, MAX_COMMAND_TTL_MS)
+        )
+        if enabled and auto_off_ms > 0:
+            threading.Thread(
+                target=self._auto_off_pump,
+                args=(side, auto_off_ms),
+                daemon=True,
+            ).start()
+        return {"ok": True, "side": side, "enabled": enabled, "auto_off_ms": auto_off_ms}
+
+    def handle_manual_spray(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored
+
+        if "enabled" not in payload:
+            raise ValueError("enabled true/false bo'lishi kerak.")
+        enabled = self._bool_payload(payload, "enabled")
+        pumps = self._parse_pumps_payload(payload)
+
+        if enabled:
+            with self._manual_spray_lock:
+                should_record = not self._manual_spray_active or self._manual_spray_pumps != pumps
+                self._manual_spray_active = True
+                self._manual_spray_pumps = pumps
+                self._manual_spray_last_seen = time.monotonic()
+            self.state.update_control(
+                manual_spray=True,
+                manual_spray_pumps=list(pumps),
+                last_command="manual_spray_on",
+            )
+            if should_record:
+                for pump in pumps:
+                    self.esp32.set_pump(pump, True)
+            if should_record:
+                self._record_spray_trigger("manual", pumps)
+            return {"ok": True, "enabled": True, "pumps": list(pumps)}
+
+        with self._manual_spray_lock:
+            pumps_to_stop = self._manual_spray_pumps or pumps
+            was_active = self._manual_spray_active
+            self._manual_spray_active = False
+            self._manual_spray_pumps = ()
+        self.state.update_control(
+            manual_spray=False,
+            manual_spray_pumps=[],
+            last_command="manual_spray_off",
+        )
+        if was_active:
+            for pump in pumps_to_stop:
+                self.esp32.set_pump(pump, False)
+        return {"ok": True, "enabled": False, "pumps": list(pumps_to_stop)}
 
     def handle_auto_spray(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored
+
         enabled = self._bool_payload(payload, "enabled", False)
         self.state.update_control(auto_spray=enabled)
         return {"ok": True, "enabled": enabled, "firmware_mode": self.settings.esp32.firmware_mode}
 
     def handle_turn_90(self, payload: dict[str, Any]) -> tuple[dict[str, Any], HTTPStatus]:
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored, HTTPStatus.OK
+
         direction = str(payload.get("direction", "")).strip().lower()
         if direction not in TURN_DIRECTIONS:
             raise ValueError("direction left yoki right bo'lishi kerak.")
 
         plan = self._build_turn_90_plan(direction)
+        self._turn_manual_lock_until = time.monotonic() + plan.total_seconds + 0.45
         self.autonomy.start(plan)
         self.state.update_control(left=0.0, right=0.0, last_command=f"turn90:{direction}")
         return {
@@ -404,6 +573,10 @@ class AppContext:
         }, HTTPStatus.OK
 
     def preview_plan(self, payload: dict[str, Any]) -> tuple[dict[str, Any], HTTPStatus]:
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored, HTTPStatus.OK
+
         try:
             plan = build_mission_plan(payload, self.settings.measurements)
             self._validate_plan_pumps(plan)
@@ -432,6 +605,10 @@ class AppContext:
         return {"ok": True, "plan": draft}, HTTPStatus.OK
 
     def start_plan(self, payload: dict[str, Any]) -> tuple[dict[str, Any], HTTPStatus]:
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored, HTTPStatus.OK
+
         source_payload = payload
         if not payload.get("segments"):
             draft = self.state.snapshot()["plans"]["draft"]
@@ -451,26 +628,123 @@ class AppContext:
             "total_seconds": plan.total_seconds,
         }, HTTPStatus.OK
 
-    def stop_plan(self) -> dict[str, Any]:
+    def stop_plan(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        ignored = self._ignore_stale_realtime_command(payload or {})
+        if ignored:
+            return ignored
+
         self.autonomy.stop("manual stop")
+        self._turn_manual_lock_until = 0.0
         return {"ok": True}
 
     def _handle_detection(self, camera_name: str, detection: Any) -> None:
         self.auto_spray.maybe_trigger(camera_name, detection)
 
+    def _parse_pumps_payload(self, payload: dict[str, Any]) -> tuple[str, ...]:
+        raw_pumps = payload.get("pumps", payload.get("sides", list(self._pump_zones)))
+        if isinstance(raw_pumps, str):
+            candidates = [item.strip() for item in raw_pumps.split(",")]
+        elif isinstance(raw_pumps, (list, tuple)):
+            candidates = [str(item).strip() for item in raw_pumps]
+        else:
+            raise ValueError("pumps ro'yxat yoki comma-separated string bo'lishi kerak.")
+
+        pumps: list[str] = []
+        for candidate in candidates:
+            pump = candidate.lower()
+            if not pump:
+                continue
+            if pump not in self._pump_zones:
+                raise ValueError(f"pump kanali noto'g'ri: {pump}")
+            if pump not in pumps:
+                pumps.append(pump)
+
+        if not pumps:
+            raise ValueError("Kamida bitta pump kanali kerak.")
+        return tuple(pumps)
+
+    def _auto_off_pump(self, side: str, auto_off_ms: int) -> None:
+        time.sleep(auto_off_ms / 1000.0)
+        self.esp32.set_pump(side, False)
+
+    def _clear_manual_spray_state(self) -> None:
+        with self._manual_spray_lock:
+            self._manual_spray_active = False
+            self._manual_spray_pumps = ()
+            self._manual_spray_last_seen = 0.0
+        self.state.update_control(manual_spray=False, manual_spray_pumps=[])
+
+    def _expire_manual_spray_if_needed(self, now: float) -> None:
+        with self._manual_spray_lock:
+            if not self._manual_spray_active:
+                return
+            if now - self._manual_spray_last_seen <= MANUAL_SPRAY_HOLD_TIMEOUT_SEC:
+                return
+            pumps_to_stop = self._manual_spray_pumps
+            self._manual_spray_active = False
+            self._manual_spray_pumps = ()
+            self._manual_spray_last_seen = 0.0
+
+        for pump in pumps_to_stop:
+            self.esp32.set_pump(pump, False)
+        self.state.update_control(
+            manual_spray=False,
+            manual_spray_pumps=[],
+            last_command="manual_spray_timeout",
+        )
+
+    def _record_spray_trigger(self, camera_name: str, pumps: tuple[str, ...]) -> None:
+        current_state = self.state.snapshot()["spray"]
+        zones = current_state.get("zones", {})
+        triggered_at = time.strftime("%H:%M:%S")
+        for pump in pumps:
+            zone_state = zones.get(pump, {"trigger_count": 0, "last_trigger_at": None})
+            zones[pump] = {
+                "trigger_count": int(zone_state.get("trigger_count", 0)) + 1,
+                "last_trigger_at": triggered_at,
+            }
+        self.state.update_spray(
+            last_camera=camera_name,
+            last_pump=pumps[0] if len(pumps) == 1 else ",".join(pumps),
+            last_pumps=list(pumps),
+            last_trigger_at=triggered_at,
+            trigger_count=int(current_state["trigger_count"]) + 1,
+            zones=zones,
+        )
+
+    def _effective_manual_speed_limit(self, left: float, right: float, speed_limit: int) -> int:
+        if speed_limit <= 0:
+            return 0
+
+        turn_delta = abs(left - right)
+        deadband = max(float(self.settings.maneuvers.manual_turn_deadband), 0.0)
+        if turn_delta <= deadband:
+            return speed_limit
+
+        min_turn_speed = int(_clamp(int(self.settings.maneuvers.manual_turn_min_speed_limit), 0, 255))
+        return max(speed_limit, min_turn_speed)
+
+    def _turn_manual_locked(self) -> bool:
+        return time.monotonic() < self._turn_manual_lock_until
+
     def _build_turn_90_plan(self, direction: str) -> MissionPlan:
         turn_speed = _clamp(float(self.settings.maneuvers.turn_90_speed), 0.15, 1.0)
         speed_limit = int(_clamp(int(self.settings.maneuvers.turn_90_speed_limit), 0, 255))
+        ramp_compensation = max(float(self.settings.maneuvers.turn_90_ramp_compensation_sec), 0.0)
         if direction == "left":
             label = "90° chapga burilish"
             duration = max(float(self.settings.maneuvers.turn_90_left_seconds), 0.05)
+            trim = _clamp(float(self.settings.maneuvers.turn_90_left_trim), 0.6, 1.8)
             left = turn_speed
             right = -turn_speed
         else:
             label = "90° o'ngga burilish"
             duration = max(float(self.settings.maneuvers.turn_90_right_seconds), 0.05)
+            trim = _clamp(float(self.settings.maneuvers.turn_90_right_trim), 0.6, 1.8)
             left = -turn_speed
             right = turn_speed
+
+        calibrated_duration = max((duration * trim) + ramp_compensation, 0.05)
 
         return MissionPlan(
             name=label,
@@ -480,10 +754,13 @@ class AppContext:
                     label=label,
                     left=left,
                     right=right,
-                    duration_seconds=round(duration, 2),
+                    duration_seconds=round(calibrated_duration, 2),
                 )
             ],
-            warnings=["90° burilish vaqt bo'yicha kalibrovka bilan ishlaydi."],
+            warnings=[
+                "90° burilish vaqt bo'yicha kalibrovka bilan ishlaydi.",
+                "Nozik sozlash uchun config.json ichida maneuvers.turn_90_left/right_seconds va *_trim ni moslang.",
+            ],
         )
 
     def _validate_plan_pumps(self, plan: MissionPlan) -> None:

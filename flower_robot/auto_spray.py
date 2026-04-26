@@ -73,5 +73,8 @@ class AutoSprayController:
             zones=zones,
         )
         time.sleep(self._config.pulse_ms / 1000.0)
+        control_state = self._state.snapshot()["control"]
+        manual_pumps = set(control_state.get("manual_spray_pumps") or [])
         for pump in pumps:
-            self._esp32.set_pump(pump, False)
+            if pump not in manual_pumps:
+                self._esp32.set_pump(pump, False)

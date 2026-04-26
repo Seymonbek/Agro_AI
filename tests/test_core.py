@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import time
 import unittest
+from unittest.mock import patch
 
 from flower_robot.auto_spray import AutoSprayController
 from flower_robot.autonomy import MissionController, build_mission_plan
+from flower_robot.camera_sources import resolve_camera_source
 from flower_robot.config import load_settings
 from flower_robot.esp32_client import ESP32Client
 from flower_robot.state import RobotStateStore
@@ -66,6 +68,15 @@ class FlowerRobotCoreTests(unittest.TestCase):
         self.assertTrue(settings.cameras[0].detect_flowers)
         self.assertFalse(settings.cameras[1].detect_flowers)
         self.assertFalse(settings.cameras[2].detect_flowers)
+        self.assertEqual([camera.source for camera in settings.cameras], ["external:0", "external:1", "external:2"])
+        self.assertGreater(settings.maneuvers.turn_90_ramp_compensation_sec, 0)
+        self.assertGreater(settings.maneuvers.manual_turn_min_speed_limit, 0)
+
+    def test_external_camera_alias_skips_builtin_camera_on_windows(self) -> None:
+        with patch("flower_robot.camera_sources.sys.platform", "win32"):
+            self.assertEqual(resolve_camera_source("external:0"), 1)
+            self.assertEqual(resolve_camera_source("external:1"), 2)
+            self.assertEqual(resolve_camera_source("external:2"), 3)
 
     def test_serial_esp32_client_protocol(self) -> None:
         settings = load_settings()

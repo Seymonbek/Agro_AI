@@ -14,7 +14,7 @@ def run_legacy_dual_camera_demo(settings: AppSettings) -> None:
         raise RuntimeError("left va right kameralar config ichida bo'lishi kerak.")
 
     model = YOLOWorld(settings.vision.model_path)
-    model.set_classes(["flower", "artificial plant"])
+    model.set_classes(settings.vision.detection_classes)
 
     cap_left = cv2.VideoCapture(left_camera.source)
     cap_right = cv2.VideoCapture(right_camera.source)

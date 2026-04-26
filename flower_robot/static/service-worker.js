@@ -1,4 +1,4 @@
-const CACHE_NAME = "flower-rover-shell-v4";
+const CACHE_NAME = "flower-rover-shell-v7";
 const SHELL_ASSETS = [
   "/",
   "/assets/style.css",

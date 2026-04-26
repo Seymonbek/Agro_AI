@@ -13,19 +13,30 @@ const state = {
   activeButtons: new Set(),
   availableCameras: new Set(),
   availablePumpZones: new Set(),
+  focusedCamera: null,
   commandSeq: 0,
+  commandTtlMs: 1200,
+  serverClockOffsetMs: 0,
   activePage: "operator",
   autonomyRunning: false,
   turnBusy: false,
+  manualSprayActive: false,
+  manualSprayDesired: false,
 };
 
-const TURN_FACTOR = 0.7;
+const TURN_FACTOR = 1.15;
 const DRIVE_KEEPALIVE_MS = 250;
+const DEFAULT_COMMAND_TTL_MS = 1200;
+const COMMAND_TIMEOUT_GRACE_MS = 250;
+const MANUAL_SPRAY_KEEPALIVE_MS = 350;
+const TURN_SETTLE_MS = 180;
 const DEFAULT_SEGMENTS = [
   { label: "Chel ustida oldinga", left: 0.55, right: 0.55, meters: 7.0 },
   { label: "Joyida burilish", left: -0.45, right: 0.45, seconds: 1.1 },
 ];
 let driveHoldTimer = null;
+let manualSprayHeartbeatTimer = null;
+const manualSprayPointerIds = new Set();
 
 const elements = {
   esp32Badge: document.getElementById("esp32Badge"),
@@ -37,8 +48,11 @@ const elements = {
   operatorPageButton: document.getElementById("operatorPageButton"),
   autonomyPageButton: document.getElementById("autonomyPageButton"),
   diagnosticsPageButton: document.getElementById("diagnosticsPageButton"),
+  cameraPanel: document.getElementById("cameraPanel"),
+  cameraCards: Array.from(document.querySelectorAll(".camera-card")),
   speedValue: document.getElementById("speedValue"),
   speedSlider: document.getElementById("speedSlider"),
+  manualSprayButton: document.getElementById("manualSprayButton"),
   stopButton: document.getElementById("stopButton"),
   autoSprayToggle: document.getElementById("autoSprayToggle"),
   turnLeftButton: document.getElementById("turnLeftButton"),
@@ -85,6 +99,61 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function setRangeProgress(element, value = Number(element.value), max = Number(element.max) || 100) {
+  const percent = `${clamp((Number(value) / max) * 100, 0, 100)}%`;
+  element.style.setProperty("--range-progress", percent);
+}
+
+function cameraCardFor(name) {
+  return elements.cameraCards.find((card) => card.dataset.cameraCard === name) || null;
+}
+
+function renderCameraFocus() {
+  const focusedName = state.focusedCamera;
+  elements.cameraPanel.classList.toggle("focus-mode", Boolean(focusedName));
+  elements.cameraPanel.classList.remove("focus-left", "focus-front", "focus-right");
+  if (focusedName) {
+    elements.cameraPanel.classList.add(`focus-${focusedName}`);
+  }
+
+  elements.cameraCards.forEach((card) => {
+    const name = card.dataset.cameraCard;
+    const title = card.querySelector("h2")?.textContent || "Kamera";
+    const isDisabled = card.classList.contains("camera-disabled");
+    const isFocused = focusedName === name;
+    const isDimmed = Boolean(focusedName) && !isFocused;
+    card.classList.toggle("focused-camera", isFocused);
+    card.classList.toggle("dimmed-camera", isDimmed);
+    card.setAttribute("aria-pressed", String(isFocused));
+    card.setAttribute(
+      "aria-label",
+      isDisabled
+        ? `${title} hozircha mavjud emas`
+        : isFocused
+          ? `${title} kattalashtirilgan. Oddiy ko'rinishga qaytish uchun qayta bosing.`
+          : `${title} ni kattalashtirish`
+    );
+  });
+}
+
+function toggleFocusedCamera(name) {
+  const card = cameraCardFor(name);
+  if (!card || card.classList.contains("camera-disabled")) return;
+  state.focusedCamera = state.focusedCamera === name ? null : name;
+  renderCameraFocus();
+}
+
+function setCameraAvailability(name, available) {
+  const card = cameraCardFor(name);
+  if (!card) return;
+  card.classList.toggle("camera-disabled", !available);
+  card.tabIndex = available ? 0 : -1;
+  card.setAttribute("aria-disabled", String(!available));
+  if (!available && state.focusedCamera === name) {
+    state.focusedCamera = null;
+  }
+}
+
 function throttle(callback, wait) {
   let lastRun = 0;
   let timeoutId = null;
@@ -111,11 +180,32 @@ function throttle(callback, wait) {
 }
 
 async function postJson(url, payload = {}) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
+  const ttlMs = Number(state.commandTtlMs || DEFAULT_COMMAND_TTL_MS);
+  const stampedPayload = stampRealtimeCommand(payload, ttlMs);
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => {
+    controller.abort();
+  }, ttlMs + COMMAND_TIMEOUT_GRACE_MS);
+
+  let response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(stampedPayload),
+      signal: controller.signal,
+      cache: "no-store",
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      error: error?.name === "AbortError" ? "request_timeout" : "network_error",
+      detail: String(error),
+    };
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+
   let body = await response.json().catch(() => ({
     ok: false,
     error: "bad_response",
@@ -127,14 +217,40 @@ async function postJson(url, payload = {}) {
   return body;
 }
 
+function serverNowMs() {
+  return Math.round(Date.now() + state.serverClockOffsetMs);
+}
+
+function stampRealtimeCommand(payload, ttlMs) {
+  const sentAtMs = serverNowMs();
+  return {
+    ...payload,
+    seq: payload.seq ?? nextCommandSeq(),
+    client_sent_at_ms: sentAtMs,
+    expires_at_ms: sentAtMs + ttlMs,
+    ttl_ms: ttlMs,
+  };
+}
+
 function nextCommandSeq() {
   state.commandSeq += 1;
   return state.commandSeq;
 }
 
+function canSendManualDrive() {
+  return !state.turnBusy && !state.autonomyRunning;
+}
+
+function delay(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
 function setPage(pageName, shouldStop = false) {
   const nextPage = ["autonomy", "diagnostics"].includes(pageName) ? pageName : "operator";
   state.activePage = nextPage;
+  document.body.classList.toggle("operator-layout", nextPage === "operator");
 
   elements.operatorPage.hidden = nextPage !== "operator";
   elements.autonomyPage.hidden = nextPage !== "autonomy";
@@ -227,6 +343,7 @@ function motionLabel(horizontal, vertical) {
 }
 
 async function sendDrivePayload(payload) {
+  if (!canSendManualDrive()) return;
   try {
     await postJson("/api/control/tank", payload);
   } catch (error) {
@@ -246,6 +363,7 @@ const sendDriveKeepalive = throttle(() => {
 }, 90);
 
 async function sendCurrentDriveState() {
+  if (!canSendManualDrive()) return;
   const { left, right, horizontal, vertical } = getDriveValues();
   elements.motionBadge.textContent = `Harakat: ${motionLabel(horizontal, vertical)}`;
 
@@ -265,6 +383,7 @@ async function sendCurrentDriveState() {
 function renderSpeed() {
   elements.speedValue.textContent = String(state.speedLimit);
   elements.speedMetric.textContent = String(state.speedLimit);
+  setRangeProgress(elements.speedSlider, state.speedLimit, 255);
 }
 
 function markButtonActive() {
@@ -287,6 +406,7 @@ function attachDriveButton(element, key) {
 
   element.addEventListener("pointerdown", (event) => {
     event.preventDefault();
+    if (!canSendManualDrive()) return;
     activePointers.add(event.pointerId);
     state.activeButtons.add(key);
     element.setPointerCapture(event.pointerId);
@@ -321,11 +441,14 @@ function syncDriveHoldTimer() {
   }
 }
 
-function clearDriveAndStop() {
+function clearDriveAndStop({ force = false } = {}) {
   state.activeButtons.clear();
   markButtonActive();
   syncDriveHoldTimer();
   elements.motionBadge.textContent = "Harakat: stop";
+  if (!force && !canSendManualDrive()) {
+    return Promise.resolve({ ok: true, skipped: "autonomy" });
+  }
   return postJson("/api/control/stop", { seq: nextCommandSeq() });
 }
 
@@ -344,7 +467,8 @@ async function triggerTurn90(direction) {
   if (state.turnBusy) return;
   setTurnBusy(true);
   try {
-    await clearDriveAndStop();
+    await clearDriveAndStop({ force: true });
+    await delay(TURN_SETTLE_MS);
     const response = await postJson("/api/control/turn90", { direction });
     if (!response.ok) {
       elements.motionBadge.textContent = `Harakat: ${response.detail || response.error || "turn xato"}`;
@@ -365,10 +489,12 @@ attachDriveButton(elements.backwardButton, "backward");
 
 window.addEventListener("blur", () => {
   void clearDriveAndStop();
+  manualSprayPointerIds.clear();
+  void setManualSpray(false, { force: true });
 });
 
 elements.stopButton.addEventListener("click", async () => {
-  await clearDriveAndStop();
+  await Promise.all([clearDriveAndStop({ force: true }), setManualSpray(false, { force: true })]);
 });
 
 elements.turnLeft90Button.addEventListener("click", async () => {
@@ -392,8 +518,90 @@ elements.autoSprayToggle.addEventListener("change", async () => {
   await postJson("/api/control/auto-spray", { enabled: elements.autoSprayToggle.checked });
 });
 
+function renderManualSprayButton(enabled) {
+  elements.manualSprayButton.classList.toggle("spraying", enabled);
+  elements.manualSprayButton.setAttribute("aria-pressed", String(enabled));
+}
+
+function syncManualSprayHeartbeat() {
+  if (state.manualSprayDesired) {
+    if (!manualSprayHeartbeatTimer) {
+      manualSprayHeartbeatTimer = window.setInterval(() => {
+        if (state.manualSprayDesired) {
+          void sendManualSprayCommand(true, { heartbeat: true });
+        }
+      }, MANUAL_SPRAY_KEEPALIVE_MS);
+    }
+    return;
+  }
+
+  if (manualSprayHeartbeatTimer) {
+    window.clearInterval(manualSprayHeartbeatTimer);
+    manualSprayHeartbeatTimer = null;
+  }
+}
+
+async function sendManualSprayCommand(enabled, { heartbeat = false } = {}) {
+  const response = await postJson("/api/control/spray", { enabled });
+  if (!response.ok) {
+    if (!heartbeat) {
+      console.warn("Qo'lda sepish buyrug'i yuborilmadi", response);
+    }
+    return response;
+  }
+
+  if (!response.ignored && state.manualSprayDesired === enabled) {
+    state.manualSprayActive = enabled;
+    renderManualSprayButton(enabled);
+  }
+  if (!heartbeat && !response.ignored) {
+    elements.motionBadge.textContent = enabled
+      ? "Harakat: qo'lda sepish"
+      : "Harakat: manual";
+  }
+  return response;
+}
+
+function setManualSpray(enabled, { force = false } = {}) {
+  if (!force && state.manualSprayDesired === enabled) {
+    return Promise.resolve({ ok: true, skipped: "same_state" });
+  }
+  state.manualSprayDesired = enabled;
+  state.manualSprayActive = enabled;
+  renderManualSprayButton(enabled);
+  syncManualSprayHeartbeat();
+  return sendManualSprayCommand(enabled);
+}
+
+elements.manualSprayButton.addEventListener("pointerdown", (event) => {
+  if (event.button !== undefined && event.button !== 0) return;
+  event.preventDefault();
+  manualSprayPointerIds.add(event.pointerId);
+  elements.manualSprayButton.setPointerCapture?.(event.pointerId);
+  void setManualSpray(true);
+});
+
+function releaseManualSprayPointer(event) {
+  const hadPointer = manualSprayPointerIds.delete(event.pointerId);
+  if (!hadPointer || manualSprayPointerIds.size > 0) return;
+  void setManualSpray(false, { force: true });
+}
+
+elements.manualSprayButton.addEventListener("pointerup", (event) => {
+  releaseManualSprayPointer(event);
+});
+
+elements.manualSprayButton.addEventListener("pointercancel", (event) => {
+  releaseManualSprayPointer(event);
+});
+
+elements.manualSprayButton.addEventListener("lostpointercapture", (event) => {
+  releaseManualSprayPointer(event);
+});
+
 function renderMissionSpeed() {
   elements.missionSpeedValue.textContent = elements.missionSpeed.value;
+  setRangeProgress(elements.missionSpeed, Number(elements.missionSpeed.value), 255);
 }
 
 function buildMissionPayload() {
@@ -468,9 +676,8 @@ document.querySelectorAll(".test-pump-button").forEach((button) => {
   button.addEventListener("click", async () => {
     const side = button.dataset.pump;
     button.disabled = true;
-    await postJson("/api/control/pump", { side, enabled: true });
-    setTimeout(async () => {
-      await postJson("/api/control/pump", { side, enabled: false });
+    await postJson("/api/control/pump", { side, enabled: true, auto_off_ms: 350 });
+    window.setTimeout(() => {
       button.disabled = false;
     }, 350);
   });
@@ -489,6 +696,7 @@ function setCameraDisabled(name) {
     right: [elements.rightCameraBadge, elements.rightCameraMeta, elements.rightCameraStream],
   };
   const [badge, meta, stream] = mapping[name];
+  setCameraAvailability(name, false);
   setBadge(badge, false, "online", "disabled");
   meta.textContent = "Config ichida yoqilmagan.";
   stream.removeAttribute("src");
@@ -499,11 +707,13 @@ function configureCameraCards(cameraList) {
   CAMERA_NAMES.forEach((name) => {
     const stream = elements[`${name}CameraStream`];
     if (state.availableCameras.has(name)) {
+      setCameraAvailability(name, true);
       if (!stream.src) stream.src = stream.dataset.stream;
     } else {
       setCameraDisabled(name);
     }
   });
+  renderCameraFocus();
 }
 
 function configurePumpCards(pumpZones) {
@@ -521,7 +731,9 @@ function cameraMeta(camera, fallback) {
   const detection = camera.last_detection;
   if (!detection) return `FPS ${camera.fps} | det ${camera.detections}`;
   const centered = detection.centered ? "CENTER" : "offset";
-  return `FPS ${camera.fps} | det ${camera.detections} | ${centered} ${detection.offset_px}px | conf ${detection.confidence}`;
+  const label = detection.label || "flower";
+  const source = detection.source ? ` | ${detection.source}` : "";
+  return `FPS ${camera.fps} | det ${camera.detections} | ${label} | ${centered} ${detection.offset_px}px | conf ${detection.confidence}${source}`;
 }
 
 function renderPumpStates(pumps) {
@@ -569,6 +781,12 @@ async function loadConfig() {
   try {
     const response = await fetch("/api/config");
     const config = await response.json();
+    if (Number.isFinite(Number(config.server_time_ms))) {
+      state.serverClockOffsetMs = Number(config.server_time_ms) - Date.now();
+    }
+    if (Number.isFinite(Number(config.command_ttl_ms))) {
+      state.commandTtlMs = Number(config.command_ttl_ms);
+    }
     configureCameraCards(config.cameras || []);
     configurePumpCards(config.auto_spray?.spray_zones || []);
   } catch (error) {
@@ -623,6 +841,12 @@ async function refreshState() {
     renderDiagnostics(esp32, measurements, spray);
 
     elements.autoSprayToggle.checked = Boolean(control.auto_spray);
+    if (manualSprayPointerIds.size === 0) {
+      state.manualSprayActive = Boolean(control.manual_spray);
+      state.manualSprayDesired = state.manualSprayActive;
+      syncManualSprayHeartbeat();
+      renderManualSprayButton(state.manualSprayActive);
+    }
     state.speedLimit = Number(control.speed_limit || state.speedLimit);
     elements.speedSlider.value = String(state.speedLimit);
     renderSpeed();
@@ -633,8 +857,20 @@ async function refreshState() {
 }
 
 renderSpeed();
+elements.cameraCards.forEach((card) => {
+  const name = card.dataset.cameraCard;
+  card.addEventListener("click", () => {
+    toggleFocusedCamera(name);
+  });
+  card.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" && event.key !== " ") return;
+    event.preventDefault();
+    toggleFocusedCamera(name);
+  });
+});
 blockSelectionAndCopyUI();
 syncTurnButtons();
+renderCameraFocus();
 setPage(
   location.hash === "#diagnostics"
     ? "diagnostics"

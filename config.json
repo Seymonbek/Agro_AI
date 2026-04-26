@@ -21,19 +21,29 @@
   },
   "vision": {
     "model_path": "yolov8s-world.pt",
-    "confidence": 0.3,
-    "imgsz": 160,
-    "detect_every_n_frames": 3,
+    "confidence": 0.22,
+    "imgsz": 320,
+    "detect_every_n_frames": 2,
+    "detection_min_interval_sec": 0.5,
+    "detection_classes": [
+      "flower",
+      "artificial plant"
+    ],
+    "center_crop_fallback": false,
+    "center_crop_ratio": 0.72,
+    "fallback_confidence": 0.16,
     "stream_width": 480,
     "stream_height": 360,
-    "capture_fps": 15,
-    "stale_frame_grabs": 2,
+    "capture_fps": 10,
+    "capture_fourcc": "MJPG",
+    "stale_frame_grabs": 0,
+    "reopen_after_failures": 3,
     "jpeg_quality": 72
   },
   "auto_spray": {
     "default_enabled": true,
-    "pulse_ms": 350,
-    "cooldown_ms": 1200,
+    "pulse_ms": 1200,
+    "cooldown_ms": 1000,
     "center_tolerance_px": 40,
     "camera_to_pump": {
       "front": [
@@ -43,27 +53,32 @@
     }
   },
   "maneuvers": {
-    "turn_90_speed": 0.45,
+    "turn_90_speed": 0.55,
     "turn_90_speed_limit": 180,
     "turn_90_left_seconds": 1.1,
-    "turn_90_right_seconds": 1.1
+    "turn_90_right_seconds": 1.1,
+    "turn_90_left_trim": 1.0,
+    "turn_90_right_trim": 1.0,
+    "turn_90_ramp_compensation_sec": 0.12,
+    "manual_turn_min_speed_limit": 180,
+    "manual_turn_deadband": 0.05
   },
   "cameras": [
     {
       "name": "front",
-      "source": 0,
+      "source": "external:0",
       "enabled": true,
       "detect_flowers": true
     },
     {
       "name": "left",
-      "source": 1,
+      "source": "external:1",
       "enabled": true,
       "detect_flowers": false
     },
     {
       "name": "right",
-      "source": 2,
+      "source": "external:2",
       "enabled": true,
       "detect_flowers": false
     }

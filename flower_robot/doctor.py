@@ -10,6 +10,7 @@ from urllib.request import urlopen
 
 import cv2
 
+from flower_robot.camera_sources import resolve_camera_source
 from flower_robot.config import AppSettings, SUPPORTED_PUMP_ZONES
 from flower_robot.paths import resource_path
 from flower_robot.serial_ports import resolve_serial_port, serial_port_candidates
@@ -24,14 +25,18 @@ class CheckResult:
 
 
 def _camera_probe(source: int | str) -> tuple[bool, str]:
-    capture = cv2.VideoCapture(source)
+    resolved_source = resolve_camera_source(source)
+    if isinstance(resolved_source, str) and resolved_source.startswith("/dev/"):
+        capture = cv2.VideoCapture(resolved_source, cv2.CAP_V4L2)
+    else:
+        capture = cv2.VideoCapture(resolved_source)
     try:
         if not capture.isOpened():
-            return False, "kamera ochilmadi"
+            return False, f"resolved={resolved_source} | kamera ochilmadi"
         ret, frame = capture.read()
         if not ret or frame is None:
-            return False, "frame olinmadi"
-        return True, f"ok {frame.shape[1]}x{frame.shape[0]}"
+            return False, f"resolved={resolved_source} | frame olinmadi"
+        return True, f"resolved={resolved_source} | ok {frame.shape[1]}x{frame.shape[0]}"
     finally:
         capture.release()
 
