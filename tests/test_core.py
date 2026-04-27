@@ -118,6 +118,35 @@ class FlowerRobotCoreTests(unittest.TestCase):
         self.assertTrue(snapshot["esp32"]["online"])
         self.assertFalse(snapshot["pumps"]["right"])
 
+    def test_drive_dedup_skips_duplicate_serial_write_within_window(self) -> None:
+        settings = load_settings()
+        settings.esp32.transport = "serial"
+        settings.esp32.serial_ready_delay_sec = 0.0
+        state = RobotStateStore(settings)
+        fake_port = FakeSerialPort([b'{"ok":true}\n'])
+        client = ESP32Client(
+            settings.esp32,
+            state,
+            pump_zones=settings.auto_spray.pump_zones,
+            serial_factory=lambda **_: fake_port,
+        )
+
+        first = client.drive_tank(0.5, 0.5, 180)
+        second = client.drive_tank(0.5, 0.5, 180)
+
+        self.assertEqual(first, "serial")
+        self.assertEqual(second, "cached")
+        self.assertEqual(fake_port.writes, [b"DRIVE 0.500 0.500 180\n"])
+
+    def test_recently_sent_command_reports_activity_window(self) -> None:
+        settings = load_settings()
+        state = RobotStateStore(settings)
+        client = ESP32Client(settings.esp32, state, pump_zones=settings.auto_spray.pump_zones)
+
+        self.assertFalse(client.recently_sent_command(0.2))
+        client._last_sent_at = time.monotonic()  # type: ignore[attr-defined]
+        self.assertTrue(client.recently_sent_command(0.2))
+
     def test_mission_plan_converts_meters(self) -> None:
         settings = load_settings()
         plan = build_mission_plan(

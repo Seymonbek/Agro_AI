@@ -60,7 +60,7 @@
     "turn_90_left_trim": 1.0,
     "turn_90_right_trim": 1.0,
     "turn_90_ramp_compensation_sec": 0.12,
-    "manual_turn_min_speed_limit": 200,
+    "manual_turn_min_speed_limit": 255,
     "manual_turn_deadband": 0.00
   },
   "cameras": [

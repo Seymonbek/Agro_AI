@@ -31,6 +31,9 @@
 
 #include <WebServer.h>
 #include <WiFi.h>
+#include <ctype.h>
+#include <stdio.h>
+#include <string.h>
 
 // =========================================================
 // Wi-Fi Access Point sozlamalari
@@ -73,10 +76,12 @@ const bool PUMP_ACTIVE_HIGH = false;
 int speedLimit = 120;                 // Asosiy tezlik limiti: 0..255
 const int MIN_EFFECTIVE_PWM = 55;     // Juda kichik PWM da motor qimirlamasa shu pastki chegara ishlaydi
 const float INPUT_DEADZONE = 0.08f;   // Juda mayda buyruqlarni ignore qilamiz
-const float RAMP_STEP_UP = 0.045f;    // Start paytida silliq tezlashish
-const float RAMP_STEP_DOWN = 0.09f;   // To'xtash yoki sekinlashish tezroq bo'lsin
-const unsigned long RAMP_INTERVAL_MS = 25;
+const float RAMP_STEP_UP = 0.08f;     // Qo'lda boshqaruv sezgir bo'lishi uchun tezroq tezlashish
+const float RAMP_STEP_DOWN = 0.12f;   // Yo'nalish almashtirish va to'xtashda chaqqonroq javob
+const unsigned long RAMP_INTERVAL_MS = 20;
 const unsigned long MOTOR_FAILSAFE_MS = 1200;
+const size_t SERIAL_LINE_BUFFER_SIZE = 96;
+const size_t STATUS_JSON_BUFFER_SIZE = 256;
 // Agar 1200 ms davomida yangi harakat buyrug'i kelmasa motor avtomatik to'xtaydi.
 
 WebServer server(80);
@@ -91,6 +96,8 @@ float targetLeftNormalized = 0.0f;
 float targetRightNormalized = 0.0f;
 float currentLeftNormalized = 0.0f;
 float currentRightNormalized = 0.0f;
+char serialLineBuffer[SERIAL_LINE_BUFFER_SIZE];
+size_t serialLineLength = 0;
 
 // 0.0..1.0 diapazondagi qiymatni 0..255 PWM ga aylantiradi.
 // Juda kichik qiymat bo'lsa motor umuman qimirlamaydi.
@@ -113,14 +120,14 @@ void writePumpPin(int pin, bool enabled) {
 }
 
 // Qaysi nasos yoqilishini tanlaydi.
-void setPumpState(const String &side, bool enabled) {
-  if (side == "left") {
+void setPumpState(const char *side, bool enabled) {
+  if (strcmp(side, "left") == 0) {
     pumpLeftState = enabled;
     writePumpPin(PUMP_LEFT_PIN, enabled);
-  } else if (side == "front") {
+  } else if (strcmp(side, "front") == 0) {
     pumpFrontState = enabled;
     writePumpPin(PUMP_FRONT_PIN, enabled);
-  } else if (side == "right") {
+  } else if (strcmp(side, "right") == 0) {
     pumpRightState = enabled;
     writePumpPin(PUMP_RIGHT_PIN, enabled);
   }
@@ -235,33 +242,29 @@ void setEnablePins() {
 }
 
 // Laptop server uchun status JSON qaytariladi.
-String buildStatusJson() {
-  String json = "{";
-  json += "\"ok\":true,";
-  json += "\"mode\":\"advanced\",";
-  json += "\"transport\":\"serial-http\",";
-  json += "\"wifiAp\":";
-  json += (ENABLE_WIFI_AP ? "true" : "false");
-  json += ",";
-  json += "\"ip\":\"" + WiFi.softAPIP().toString() + "\",";
-  json += "\"ssid\":\"" + String(AP_SSID) + "\",";
-  json += "\"speedLimit\":" + String(speedLimit) + ",";
-  json += "\"failsafeMs\":" + String(MOTOR_FAILSAFE_MS) + ",";
-  json += "\"pumps\":{";
-  json += "\"left\":";
-  json += pumpLeftState ? "true" : "false";
-  json += ",\"front\":";
-  json += pumpFrontState ? "true" : "false";
-  json += ",\"right\":";
-  json += pumpRightState ? "true" : "false";
-  json += "},";
-  json += "\"uptimeMs\":" + String(millis());
-  json += "}";
-  return json;
+void buildStatusJson(char *buffer, size_t bufferSize) {
+  String ipString = WiFi.softAPIP().toString();
+  snprintf(
+      buffer,
+      bufferSize,
+      "{\"ok\":true,\"mode\":\"advanced\",\"transport\":\"serial-http\",\"wifiAp\":%s,"
+      "\"ip\":\"%s\",\"ssid\":\"%s\",\"speedLimit\":%d,\"failsafeMs\":%lu,"
+      "\"pumps\":{\"left\":%s,\"front\":%s,\"right\":%s},\"uptimeMs\":%lu}",
+      ENABLE_WIFI_AP ? "true" : "false",
+      ipString.c_str(),
+      AP_SSID,
+      speedLimit,
+      MOTOR_FAILSAFE_MS,
+      pumpLeftState ? "true" : "false",
+      pumpFrontState ? "true" : "false",
+      pumpRightState ? "true" : "false",
+      millis());
 }
 
 void sendStatus() {
-  server.send(200, "application/json", buildStatusJson());
+  char buffer[STATUS_JSON_BUFFER_SIZE];
+  buildStatusJson(buffer, sizeof(buffer));
+  server.send(200, "application/json", buffer);
 }
 
 // Wi-Fi AP ni barqaror ushlash: fixed IP, aniq channel, sleep off.
@@ -321,7 +324,7 @@ void handleApiPump() {
     server.send(400, "application/json", "{\"ok\":false,\"error\":\"invalid_pump_side\"}");
     return;
   }
-  setPumpState(side, enabled);
+  setPumpState(side.c_str(), enabled);
   sendStatus();
 }
 
@@ -402,104 +405,115 @@ void handleNotFound() {
 // PUMP front off
 // STOP
 // =========================================================
-String tokenAt(String text, int tokenIndex) {
-  text.trim();
-  int start = 0;
-  int currentIndex = 0;
-
-  while (start < text.length()) {
-    while (start < text.length() && text.charAt(start) == ' ') {
-      start++;
-    }
-    if (start >= text.length()) {
-      break;
-    }
-
-    int end = text.indexOf(' ', start);
-    if (end < 0) {
-      end = text.length();
-    }
-
-    if (currentIndex == tokenIndex) {
-      return text.substring(start, end);
-    }
-
-    currentIndex++;
-    start = end + 1;
+void trimWhitespace(char *text) {
+  size_t start = 0;
+  size_t length = strlen(text);
+  while (start < length && isspace((unsigned char)text[start])) {
+    start++;
   }
+  while (length > start && isspace((unsigned char)text[length - 1])) {
+    length--;
+  }
+  if (start > 0) {
+    memmove(text, text + start, length - start);
+  }
+  text[length - start] = '\0';
+}
 
-  return "";
+void toUpperInPlace(char *text) {
+  while (*text != '\0') {
+    *text = (char)toupper((unsigned char)*text);
+    text++;
+  }
+}
+
+void toLowerInPlace(char *text) {
+  while (*text != '\0') {
+    *text = (char)tolower((unsigned char)*text);
+    text++;
+  }
 }
 
 void sendSerialStatus() {
-  Serial.println(buildStatusJson());
+  char buffer[STATUS_JSON_BUFFER_SIZE];
+  buildStatusJson(buffer, sizeof(buffer));
+  Serial.println(buffer);
 }
 
-void sendSerialError(const String &errorCode) {
+void sendSerialError(const char *errorCode) {
   Serial.print("{\"ok\":false,\"error\":\"");
   Serial.print(errorCode);
   Serial.println("\"}");
 }
 
-void handleSerialCommand(String line) {
-  line.trim();
-  if (line.length() == 0) {
+void handleSerialCommand(char *line) {
+  trimWhitespace(line);
+  if (line[0] == '\0') {
     return;
   }
 
-  String command = tokenAt(line, 0);
-  command.toUpperCase();
+  char *context = nullptr;
+  char *command = strtok_r(line, " ", &context);
+  if (command == nullptr) {
+    return;
+  }
+  toUpperInPlace(command);
 
-  if (command == "STATUS" || command == "PING") {
+  if (strcmp(command, "STATUS") == 0 || strcmp(command, "PING") == 0) {
     sendSerialStatus();
     return;
   }
 
-  if (command == "SPEED") {
-    String value = tokenAt(line, 1);
-    if (value.length() == 0) {
+  if (strcmp(command, "SPEED") == 0) {
+    char *value = strtok_r(nullptr, " ", &context);
+    if (value == nullptr) {
       sendSerialError("missing_speed");
       return;
     }
-    speedLimit = constrain(value.toInt(), 0, 255);
+    speedLimit = constrain(atoi(value), 0, 255);
     sendSerialStatus();
     return;
   }
 
-  if (command == "DRIVE") {
-    String leftToken = tokenAt(line, 1);
-    String rightToken = tokenAt(line, 2);
-    String speedToken = tokenAt(line, 3);
-    if (leftToken.length() == 0 || rightToken.length() == 0) {
+  if (strcmp(command, "DRIVE") == 0) {
+    char *leftToken = strtok_r(nullptr, " ", &context);
+    char *rightToken = strtok_r(nullptr, " ", &context);
+    char *speedToken = strtok_r(nullptr, " ", &context);
+    if (leftToken == nullptr || rightToken == nullptr) {
       sendSerialError("missing_drive_values");
       return;
     }
-    if (speedToken.length() > 0) {
-      speedLimit = constrain(speedToken.toInt(), 0, 255);
+    if (speedToken != nullptr && speedToken[0] != '\0') {
+      speedLimit = constrain(atoi(speedToken), 0, 255);
     }
-    applyTankDrive(leftToken.toFloat(), rightToken.toFloat());
+    applyTankDrive((float)atof(leftToken), (float)atof(rightToken));
     sendSerialStatus();
     return;
   }
 
-  if (command == "PUMP") {
-    String side = tokenAt(line, 1);
-    String state = tokenAt(line, 2);
-    state.toLowerCase();
-    if (side != "left" && side != "front" && side != "right") {
-      sendSerialError("invalid_pump_side");
-      return;
-    }
-    if (state != "on" && state != "off") {
+  if (strcmp(command, "PUMP") == 0) {
+    char *side = strtok_r(nullptr, " ", &context);
+    char *state = strtok_r(nullptr, " ", &context);
+    if (side == nullptr || state == nullptr) {
       sendSerialError("invalid_pump_state");
       return;
     }
-    setPumpState(side, state == "on");
+    toLowerInPlace(side);
+    toLowerInPlace(state);
+    if (strcmp(side, "left") != 0 && strcmp(side, "front") != 0 && strcmp(side, "right") != 0) {
+      sendSerialError("invalid_pump_side");
+      return;
+    }
+    if (strcmp(state, "on") != 0 && strcmp(state, "off") != 0) {
+      sendSerialError("invalid_pump_state");
+      return;
+    }
+    setPumpState(side, strcmp(state, "on") == 0);
     sendSerialStatus();
     return;
   }
 
-  if (command == "STOP") {
+  if (strcmp(command, "STOP") == 0) {
     stopMotors();
     disableAllPumps();
     sendSerialStatus();
@@ -511,8 +525,24 @@ void handleSerialCommand(String line) {
 
 void handleSerialCommands() {
   while (Serial.available() > 0) {
-    String line = Serial.readStringUntil('\n');
-    handleSerialCommand(line);
+    char incoming = (char)Serial.read();
+    if (incoming == '\r') {
+      continue;
+    }
+
+    if (incoming == '\n') {
+      serialLineBuffer[serialLineLength] = '\0';
+      handleSerialCommand(serialLineBuffer);
+      serialLineLength = 0;
+      continue;
+    }
+
+    if (serialLineLength < (SERIAL_LINE_BUFFER_SIZE - 1)) {
+      serialLineBuffer[serialLineLength++] = incoming;
+    } else {
+      serialLineLength = 0;
+      sendSerialError("line_too_long");
+    }
   }
 }
 

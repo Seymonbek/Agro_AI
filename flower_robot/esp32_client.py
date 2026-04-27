@@ -131,8 +131,8 @@ class ESP32Client:
             if callable(flush):
                 flush()
 
-            attempts = 8
-            for _ in range(attempts):
+            deadline = time.monotonic() + max(self._config.serial_timeout_sec * 2.0, 0.2)
+            while time.monotonic() < deadline:
                 raw = port.readline()
                 if not raw:
                     continue
@@ -146,6 +146,9 @@ class ESP32Client:
                     return response
 
             raise TimeoutError(f"ESP32 serial javob bermadi: {command}")
+
+    def recently_sent_command(self, within_sec: float) -> bool:
+        return (time.monotonic() - self._last_sent_at) < max(within_sec, 0.0)
 
     def _parse_status(self, body: str) -> None:
         try:

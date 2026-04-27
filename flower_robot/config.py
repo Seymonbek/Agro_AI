@@ -25,8 +25,8 @@ class Esp32Config:
     firmware_mode: str = "legacy"
     serial_port: str = "auto"
     baudrate: int = 115200
-    serial_timeout_sec: float = 0.5
-    serial_ready_delay_sec: float = 1.0
+    serial_timeout_sec: float = 0.12
+    serial_ready_delay_sec: float = 0.6
 
 
 @dataclass
@@ -126,8 +126,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "firmware_mode": "advanced",
         "serial_port": "auto",
         "baudrate": 115200,
-        "serial_timeout_sec": 0.5,
-        "serial_ready_delay_sec": 1.0,
+        "serial_timeout_sec": 0.12,
+        "serial_ready_delay_sec": 0.6,
     },
     "measurements": {
         "lane_width_cm": 70.0,

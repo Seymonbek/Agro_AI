@@ -261,7 +261,9 @@ class AppContext:
             now = time.monotonic()
             self._expire_manual_spray_if_needed(now)
             if now >= next_status_poll:
-                self.esp32.poll_status()
+                # Manual drive paytida status polling serial yo'lini band qilib qo'ymasligi kerak.
+                if not self.esp32.recently_sent_command(0.35):
+                    self.esp32.poll_status()
                 self.state.set_notes(self._build_notes())
                 next_status_poll = now + 2.0
             self._monitor_stop.wait(0.1)
