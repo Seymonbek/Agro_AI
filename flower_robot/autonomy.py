@@ -10,6 +10,7 @@ from flower_robot.esp32_client import ESP32Client
 from flower_robot.state import RobotStateStore
 
 SPRAY_ZONES = {"left", "front", "right"}
+AUTONOMY_DRIVE_KEEPALIVE_SEC = 0.25
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -177,10 +178,15 @@ class MissionController:
 
             self._client.drive_tank(segment.left, segment.right, plan.speed_limit)
             started_at = time.monotonic()
+            last_drive_at = started_at
             while not stop_event.is_set() and self._is_current(generation):
-                elapsed = time.monotonic() - started_at
+                now = time.monotonic()
+                elapsed = now - started_at
                 if elapsed >= segment.duration_seconds:
                     break
+                if now - last_drive_at >= AUTONOMY_DRIVE_KEEPALIVE_SEC:
+                    self._client.drive_tank(segment.left, segment.right, plan.speed_limit)
+                    last_drive_at = now
                 absolute_elapsed = elapsed_before_segment + elapsed
                 self._state.update_autonomy(
                     progress=round(absolute_elapsed / total_seconds, 3),

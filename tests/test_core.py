@@ -186,6 +186,26 @@ class FlowerRobotCoreTests(unittest.TestCase):
         self.assertEqual(snapshot["progress"], 1.0)
         self.assertIn((0.2, 0.2, 150), fake_esp.drive_calls)
 
+    def test_autonomy_resends_drive_during_long_segment_to_avoid_failsafe(self) -> None:
+        settings = load_settings()
+        state = RobotStateStore(settings)
+        fake_esp = FakeESP32()
+        controller = MissionController(fake_esp, state)  # type: ignore[arg-type]
+        plan = build_mission_plan(
+            {
+                "name": "keepalive",
+                "speed_limit": 180,
+                "segments": [{"label": "turn", "left": 0.55, "right": -0.55, "seconds": 0.72}],
+            },
+            settings.measurements,
+        )
+
+        controller.start(plan)
+        time.sleep(0.95)
+
+        self.assertGreaterEqual(fake_esp.drive_calls.count((0.55, -0.55, 180)), 3)
+        self.assertEqual(state.snapshot()["autonomy"]["status"], "completed")
+
     def test_auto_spray_pulses_expected_pumps(self) -> None:
         settings = load_settings()
         state = RobotStateStore(settings)
