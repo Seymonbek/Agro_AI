@@ -69,6 +69,7 @@ class FlowerRobotCoreTests(unittest.TestCase):
         self.assertFalse(settings.cameras[1].detect_flowers)
         self.assertFalse(settings.cameras[2].detect_flowers)
         self.assertEqual([camera.source for camera in settings.cameras], ["external:0", "external:1", "external:2"])
+        self.assertTrue(all(camera.rotate_180 for camera in settings.cameras))
         self.assertGreater(settings.maneuvers.turn_90_ramp_compensation_sec, 0)
         self.assertGreater(settings.maneuvers.manual_turn_min_speed_limit, 0)
 
@@ -289,6 +290,20 @@ class FlowerRobotCoreTests(unittest.TestCase):
         snapshot = state.snapshot()["spray"]
         self.assertEqual(snapshot["zones"]["left"]["trigger_count"], 1)
         self.assertEqual(snapshot["zones"]["right"]["trigger_count"], 1)
+
+    def test_legacy_http_pump_control_marks_client_offline_without_faking_state(self) -> None:
+        settings = load_settings()
+        settings.esp32.transport = "http"
+        settings.esp32.firmware_mode = "legacy"
+        state = RobotStateStore(settings)
+        client = ESP32Client(settings.esp32, state, pump_zones=settings.auto_spray.pump_zones)
+
+        client.set_pump("left", True)
+
+        snapshot = state.snapshot()
+        self.assertFalse(snapshot["esp32"]["online"])
+        self.assertFalse(snapshot["pumps"]["left"])
+        self.assertIn("Legacy firmware pump control", snapshot["esp32"]["last_error"] or "")
 
 
 if __name__ == "__main__":

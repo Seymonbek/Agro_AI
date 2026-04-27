@@ -288,6 +288,17 @@ class CameraWorker:
             return capture.retrieve()
         return capture.read()
 
+    def _prepare_frame(self, frame: np.ndarray) -> np.ndarray:
+        if self.camera.rotate_180:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        return cv2.resize(
+            frame,
+            (self._settings.vision.stream_width, self._settings.vision.stream_height),
+        )
+
+    def _should_draw_center_line(self) -> bool:
+        return self.camera.name == "front"
+
     def _encode_placeholder(self, title: str, subtitle: str) -> bytes:
         frame = _placeholder_frame(
             f"{self.camera.name.upper()} CAMERA",
@@ -377,7 +388,8 @@ class CameraWorker:
             frame = np.zeros((height, width, 3), dtype=np.uint8)
             frame[:] = (20, 31, 27)
             cv2.rectangle(frame, (0, 0), (width, height), (30, 47, 39), -1)
-            cv2.line(frame, (width // 2, 0), (width // 2, height), (255, 214, 102), 2)
+            if self._should_draw_center_line():
+                cv2.line(frame, (width // 2, 0), (width // 2, height), (255, 214, 102), 2)
 
             lane_top = width // 2 - 74
             lane_bottom = width // 2 - 150
@@ -478,21 +490,19 @@ class CameraWorker:
             consecutive_failures = 0
             frame_number += 1
             frames_since_tick += 1
-            view = cv2.resize(
-                frame,
-                (self._settings.vision.stream_width, self._settings.vision.stream_height),
-            )
+            view = self._prepare_frame(frame)
 
             if self._should_start_detection(frame_number):
                 self._start_detection(view.copy())
 
-            cv2.line(
-                view,
-                (view.shape[1] // 2, 0),
-                (view.shape[1] // 2, view.shape[0]),
-                (255, 214, 102),
-                2,
-            )
+            if self._should_draw_center_line():
+                cv2.line(
+                    view,
+                    (view.shape[1] // 2, 0),
+                    (view.shape[1] // 2, view.shape[0]),
+                    (255, 214, 102),
+                    2,
+                )
             self._draw_detection_overlay(view)
 
             now = time.monotonic()

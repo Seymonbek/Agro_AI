@@ -102,6 +102,7 @@ class CameraConfig:
     source: int | str
     enabled: bool = True
     detect_flowers: bool = False
+    rotate_180: bool = False
 
 
 @dataclass
@@ -171,9 +172,27 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "manual_turn_deadband": 0.05,
     },
     "cameras": [
-        {"name": "front", "source": "external:0", "enabled": True, "detect_flowers": True},
-        {"name": "left", "source": "external:1", "enabled": True, "detect_flowers": False},
-        {"name": "right", "source": "external:2", "enabled": True, "detect_flowers": False},
+        {
+            "name": "front",
+            "source": "external:0",
+            "enabled": True,
+            "detect_flowers": True,
+            "rotate_180": False,
+        },
+        {
+            "name": "left",
+            "source": "external:1",
+            "enabled": True,
+            "detect_flowers": False,
+            "rotate_180": False,
+        },
+        {
+            "name": "right",
+            "source": "external:2",
+            "enabled": True,
+            "detect_flowers": False,
+            "rotate_180": False,
+        },
     ],
 }
 
@@ -251,6 +270,7 @@ def load_settings(config_path: Path | None = None) -> AppSettings:
             source=_normalise_camera_source(item["source"]),
             enabled=item.get("enabled", True),
             detect_flowers=item.get("detect_flowers", False),
+            rotate_180=item.get("rotate_180", False),
         )
         for item in config_data["cameras"]
     ]

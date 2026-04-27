@@ -11,6 +11,7 @@ from urllib.request import Request, urlopen
 
 from flower_robot.config import load_settings
 from flower_robot.server import AppContext, RequestHandler
+from flower_robot.vision import DetectionResult
 
 
 class FlowerRobotHttpTests(unittest.TestCase):
@@ -132,6 +133,60 @@ class FlowerRobotHttpTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertIn('"auto_off_ms": 50', body)
         self.assertEqual(calls, [("left", True), ("left", False)])
+
+    def test_pump_test_auto_off_does_not_interrupt_manual_spray(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_pump = lambda side, enabled: (  # type: ignore[method-assign]
+            calls.append((side, enabled)),
+            self.context.state.update_pumps(**{side: enabled}),
+        )
+
+        self.context.handle_manual_spray({"enabled": True})
+        status, body = self.post_json(
+            "/api/control/pump",
+            {"side": "left", "enabled": True, "auto_off_ms": 50},
+        )
+        time.sleep(0.12)
+
+        self.assertEqual(status, 200)
+        self.assertIn('"auto_off_ms": 50', body)
+        self.assertEqual(calls, [("left", True), ("right", True)])
+        self.assertTrue(self.context.state.snapshot()["pumps"]["left"])
+
+        self.context.handle_manual_spray({"enabled": False})
+        self.assertEqual(
+            calls,
+            [("left", True), ("right", True), ("left", False), ("right", False)],
+        )
+
+    def test_manual_release_waits_for_active_auto_spray_pulse(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_pump = lambda side, enabled: (  # type: ignore[method-assign]
+            calls.append((side, enabled)),
+            self.context.state.update_pumps(**{side: enabled}),
+        )
+        self.context.settings.auto_spray.pulse_ms = 120
+        self.context.state.update_control(auto_spray=True)
+
+        self.context.handle_manual_spray({"enabled": True})
+        self.context.auto_spray.maybe_trigger(
+            "front",
+            DetectionResult(
+                detections=1,
+                last_detection={"centered": True},
+                centered_detection={"centered": True},
+            ),
+        )
+        time.sleep(0.03)
+        self.context.handle_manual_spray({"enabled": False})
+
+        self.assertTrue(self.context.state.snapshot()["pumps"]["left"])
+        self.assertTrue(self.context.state.snapshot()["pumps"]["right"])
+        time.sleep(0.14)
+        self.assertEqual(
+            calls,
+            [("left", True), ("right", True), ("left", False), ("right", False)],
+        )
 
     def test_manual_spray_hold_sets_and_clears_configured_pumps(self) -> None:
         calls: list[tuple[str, bool]] = []

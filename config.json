@@ -60,27 +60,30 @@
     "turn_90_left_trim": 1.0,
     "turn_90_right_trim": 1.0,
     "turn_90_ramp_compensation_sec": 0.12,
-    "manual_turn_min_speed_limit": 180,
-    "manual_turn_deadband": 0.05
+    "manual_turn_min_speed_limit": 200,
+    "manual_turn_deadband": 0.00
   },
   "cameras": [
     {
       "name": "front",
       "source": "external:0",
       "enabled": true,
-      "detect_flowers": true
+      "detect_flowers": true,
+      "rotate_180": true
     },
     {
       "name": "left",
       "source": "external:1",
       "enabled": true,
-      "detect_flowers": false
+      "detect_flowers": false,
+      "rotate_180": true
     },
     {
       "name": "right",
       "source": "external:2",
       "enabled": true,
-      "detect_flowers": false
+      "detect_flowers": false,
+      "rotate_180": true
     }
   ]
 }

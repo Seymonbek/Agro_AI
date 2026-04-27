@@ -25,6 +25,7 @@ COMMAND_TTL_MS = 1200
 MAX_COMMAND_TTL_MS = 5000
 MAX_FUTURE_COMMAND_SKEW_MS = 2000
 MANUAL_SPRAY_HOLD_TIMEOUT_SEC = 1.4
+MANUAL_SPRAY_OWNER = "manual_spray"
 
 
 class RequestJsonError(ValueError):
@@ -220,7 +221,18 @@ class AppContext:
         self.state = RobotStateStore(settings)
         self._pump_zones = tuple(settings.auto_spray.pump_zones)
         self.esp32 = ESP32Client(settings.esp32, self.state, pump_zones=self._pump_zones)
-        self.auto_spray = AutoSprayController(settings.auto_spray, self.esp32, self.state)
+        self._pump_claim_lock = threading.Lock()
+        self._pump_claims: dict[str, set[str]] = {pump: set() for pump in self._pump_zones}
+        self._pump_output_state: dict[str, bool] = {pump: False for pump in self._pump_zones}
+        self._pump_test_owners: dict[str, str] = {}
+        self._pump_owner_seq = 0
+        self.auto_spray = AutoSprayController(
+            settings.auto_spray,
+            self.esp32,
+            self.state,
+            acquire_pumps=self._acquire_pump_claims,
+            release_pumps=self._release_pump_claims,
+        )
         self.vision = VisionHub(settings, self.state, detection_callback=self._handle_detection)
         self.autonomy = MissionController(self.esp32, self.state)
         self._monitor_stop = threading.Event()
@@ -488,14 +500,24 @@ class AppContext:
         if side not in self._pump_zones:
             return {"ok": False, "error": "invalid_pump_side"}
         enabled = self._bool_payload(payload, "enabled", False)
-        self.esp32.set_pump(side, enabled)
         auto_off_ms = int(
             _clamp(self._int_payload(payload, "auto_off_ms", 0), 0, MAX_COMMAND_TTL_MS)
         )
+        owner = self._pump_test_owners.get(side)
+        if enabled:
+            new_owner = self._next_pump_owner(f"pump_test:{side}")
+            self._pump_test_owners[side] = new_owner
+            self._acquire_pump_claims(new_owner, (side,))
+            if owner and owner != new_owner:
+                self._release_pump_claims(owner, (side,))
+            owner = new_owner
+        elif owner:
+            self._pump_test_owners.pop(side, None)
+            self._release_pump_claims(owner, (side,))
         if enabled and auto_off_ms > 0:
             threading.Thread(
                 target=self._auto_off_pump,
-                args=(side, auto_off_ms),
+                args=(owner, side, auto_off_ms),
                 daemon=True,
             ).start()
         return {"ok": True, "side": side, "enabled": enabled, "auto_off_ms": auto_off_ms}
@@ -512,7 +534,9 @@ class AppContext:
 
         if enabled:
             with self._manual_spray_lock:
-                should_record = not self._manual_spray_active or self._manual_spray_pumps != pumps
+                previous_pumps = self._manual_spray_pumps
+                should_reconfigure = (not self._manual_spray_active) or previous_pumps != pumps
+                should_record = should_reconfigure
                 self._manual_spray_active = True
                 self._manual_spray_pumps = pumps
                 self._manual_spray_last_seen = time.monotonic()
@@ -521,9 +545,10 @@ class AppContext:
                 manual_spray_pumps=list(pumps),
                 last_command="manual_spray_on",
             )
-            if should_record:
-                for pump in pumps:
-                    self.esp32.set_pump(pump, True)
+            if should_reconfigure and previous_pumps and previous_pumps != pumps:
+                self._release_pump_claims(MANUAL_SPRAY_OWNER, previous_pumps)
+            if should_reconfigure:
+                self._acquire_pump_claims(MANUAL_SPRAY_OWNER, pumps)
             if should_record:
                 self._record_spray_trigger("manual", pumps)
             return {"ok": True, "enabled": True, "pumps": list(pumps)}
@@ -539,8 +564,7 @@ class AppContext:
             last_command="manual_spray_off",
         )
         if was_active:
-            for pump in pumps_to_stop:
-                self.esp32.set_pump(pump, False)
+            self._release_pump_claims(MANUAL_SPRAY_OWNER, pumps_to_stop)
         return {"ok": True, "enabled": False, "pumps": list(pumps_to_stop)}
 
     def handle_auto_spray(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -663,15 +687,22 @@ class AppContext:
             raise ValueError("Kamida bitta pump kanali kerak.")
         return tuple(pumps)
 
-    def _auto_off_pump(self, side: str, auto_off_ms: int) -> None:
+    def _auto_off_pump(self, owner: str | None, side: str, auto_off_ms: int) -> None:
         time.sleep(auto_off_ms / 1000.0)
-        self.esp32.set_pump(side, False)
+        if owner is None:
+            return
+        if self._pump_test_owners.get(side) == owner:
+            self._pump_test_owners.pop(side, None)
+        self._release_pump_claims(owner, (side,))
 
     def _clear_manual_spray_state(self) -> None:
         with self._manual_spray_lock:
+            pumps_to_release = self._manual_spray_pumps
             self._manual_spray_active = False
             self._manual_spray_pumps = ()
             self._manual_spray_last_seen = 0.0
+        if pumps_to_release:
+            self._release_pump_claims(MANUAL_SPRAY_OWNER, pumps_to_release)
         self.state.update_control(manual_spray=False, manual_spray_pumps=[])
 
     def _expire_manual_spray_if_needed(self, now: float) -> None:
@@ -685,13 +716,44 @@ class AppContext:
             self._manual_spray_pumps = ()
             self._manual_spray_last_seen = 0.0
 
-        for pump in pumps_to_stop:
-            self.esp32.set_pump(pump, False)
+        self._release_pump_claims(MANUAL_SPRAY_OWNER, pumps_to_stop)
         self.state.update_control(
             manual_spray=False,
             manual_spray_pumps=[],
             last_command="manual_spray_timeout",
         )
+
+    def _next_pump_owner(self, prefix: str) -> str:
+        with self._pump_claim_lock:
+            self._pump_owner_seq += 1
+            return f"{prefix}:{self._pump_owner_seq}"
+
+    def _acquire_pump_claims(self, owner: str, pumps: tuple[str, ...]) -> None:
+        self._update_pump_claims(owner, pumps, enabled=True)
+
+    def _release_pump_claims(self, owner: str, pumps: tuple[str, ...]) -> None:
+        self._update_pump_claims(owner, pumps, enabled=False)
+
+    def _update_pump_claims(self, owner: str, pumps: tuple[str, ...], enabled: bool) -> None:
+        updates: list[tuple[str, bool]] = []
+        with self._pump_claim_lock:
+            for pump in pumps:
+                if pump not in self._pump_claims:
+                    continue
+                holders = self._pump_claims[pump]
+                was_enabled = bool(holders)
+                if enabled:
+                    holders.add(owner)
+                else:
+                    holders.discard(owner)
+                should_enable = bool(holders)
+                if should_enable == was_enabled:
+                    continue
+                self._pump_output_state[pump] = should_enable
+                updates.append((pump, should_enable))
+
+        for pump, state in updates:
+            self.esp32.set_pump(pump, state)
 
     def _record_spray_trigger(self, camera_name: str, pumps: tuple[str, ...]) -> None:
         current_state = self.state.snapshot()["spray"]

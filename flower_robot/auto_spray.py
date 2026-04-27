@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import threading
 import time
+from typing import Callable
 
 from flower_robot.config import AutoSprayConfig
 from flower_robot.esp32_client import ESP32Client
@@ -15,10 +16,14 @@ class AutoSprayController:
         config: AutoSprayConfig,
         esp32: ESP32Client,
         state: RobotStateStore,
+        acquire_pumps: Callable[[str, tuple[str, ...]], None] | None = None,
+        release_pumps: Callable[[str, tuple[str, ...]], None] | None = None,
     ) -> None:
         self._config = config
         self._esp32 = esp32
         self._state = state
+        self._acquire_pumps = acquire_pumps
+        self._release_pumps = release_pumps
         self._lock = threading.Lock()
         self._cooldown_until: dict[str, float] = {}
 
@@ -31,10 +36,6 @@ class AutoSprayController:
             return
 
         if detection.centered_detection is None:
-            return
-
-        pump_state = self._state.snapshot()["pumps"]
-        if any(pump_state.get(pump) for pump in pumps):
             return
 
         now = time.monotonic()
@@ -53,8 +54,12 @@ class AutoSprayController:
         worker.start()
 
     def _pulse_pumps(self, camera_name: str, pumps: tuple[str, ...]) -> None:
-        for pump in pumps:
-            self._esp32.set_pump(pump, True)
+        owner = f"auto:{camera_name}:{time.monotonic_ns()}"
+        if self._acquire_pumps is not None:
+            self._acquire_pumps(owner, pumps)
+        else:
+            for pump in pumps:
+                self._esp32.set_pump(pump, True)
         current_state = self._state.snapshot()["spray"]
         zones = current_state.get("zones", {})
         triggered_at = time.strftime("%H:%M:%S")
@@ -73,8 +78,11 @@ class AutoSprayController:
             zones=zones,
         )
         time.sleep(self._config.pulse_ms / 1000.0)
-        control_state = self._state.snapshot()["control"]
-        manual_pumps = set(control_state.get("manual_spray_pumps") or [])
-        for pump in pumps:
-            if pump not in manual_pumps:
-                self._esp32.set_pump(pump, False)
+        if self._release_pumps is not None:
+            self._release_pumps(owner, pumps)
+        else:
+            control_state = self._state.snapshot()["control"]
+            manual_pumps = set(control_state.get("manual_spray_pumps") or [])
+            for pump in pumps:
+                if pump not in manual_pumps:
+                    self._esp32.set_pump(pump, False)

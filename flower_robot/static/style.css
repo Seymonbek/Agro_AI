@@ -1535,21 +1535,171 @@ input[type="range"]::-moz-range-thumb {
 }
 
 @media (orientation: portrait) and (max-width: 820px) {
+  html,
   body {
-    overflow: hidden;
+    overflow: auto;
+  }
+
+  .app-shell,
+  body.operator-layout .app-shell {
+    display: grid;
+    height: auto;
+    min-height: 100dvh;
+    overflow: visible;
+    padding: 10px 10px 16px;
+    gap: 8px;
+  }
+
+  .top-bar {
+    min-height: 40px;
+  }
+
+  .page-tabs {
+    width: min(100%, 420px);
+  }
+
+  .page-stack,
+  body.operator-layout .page-stack,
+  .app-page {
+    overflow: visible;
+    min-height: 0;
+  }
+
+  .operator-page {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto auto;
+    height: auto;
+    overflow: visible;
+    gap: 10px;
+  }
+
+  .control-rail {
+    padding: 12px;
+    border-radius: 20px;
+    gap: 10px;
+  }
+
+  .turn-column,
+  .move-column {
+    grid-column: 1;
+    grid-row: auto;
+    row-gap: 10px;
+  }
+
+  .turn-column {
+    grid-template-rows: auto auto;
+  }
+
+  .move-column {
+    grid-template-rows: repeat(3, auto);
+  }
+
+  .turn-pair {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+
+  .drive-button,
+  .turn-pair .drive-button,
+  .turn-column > .turn-90,
+  .move-column .drive-button {
+    min-height: 84px;
+    padding: 12px 10px;
+    gap: 8px;
+    border-radius: 18px;
+    font-size: 0.92rem;
+  }
+
+  .drive-icon {
+    width: 36px;
+    height: 36px;
+  }
+
+  .camera-panel,
+  .camera-panel.focus-mode {
+    grid-column: 1;
+    grid-row: auto;
+    grid-template-columns: 1fr;
+    grid-template-rows: auto;
+    gap: 10px;
+  }
+
+  .camera-card,
+  .camera-card[data-camera-card="left"],
+  .camera-card[data-camera-card="right"],
+  .camera-card[data-camera-card="front"],
+  .camera-panel.focus-mode .camera-card.focused-camera,
+  .camera-panel.focus-mode.focus-left .camera-card[data-camera-card="front"],
+  .camera-panel.focus-mode.focus-front .camera-card[data-camera-card="left"],
+  .camera-panel.focus-mode.focus-right .camera-card[data-camera-card="left"],
+  .camera-panel.focus-mode.focus-left .camera-card[data-camera-card="right"],
+  .camera-panel.focus-mode.focus-front .camera-card[data-camera-card="right"],
+  .camera-panel.focus-mode.focus-right .camera-card[data-camera-card="front"] {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .camera-card {
+    padding: 12px;
+    border-radius: 20px;
+  }
+
+  .camera-card img {
+    min-height: 180px;
+    max-height: 34vh;
+    border-radius: 16px;
+  }
+
+  .camera-meta {
+    display: block;
+    margin: 8px 2px 0;
+    color: var(--muted);
+    font-size: 0.72rem;
+    line-height: 1.35;
+  }
+
+  .speed-box {
+    grid-column: 1;
+    grid-row: auto;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .speed-readout {
+    font-size: 1rem;
+    text-align: center;
+  }
+
+  .manual-spray-button {
+    width: 100%;
+    min-width: 0;
+    min-height: 52px;
+  }
+
+  .autonomy-page,
+  .diagnostics-page {
+    padding: 0 0 14px;
+  }
+
+  .autonomy-panel,
+  .diagnostics-panel {
+    width: 100%;
+    padding: 12px;
+    border-radius: 20px;
+  }
+
+  .status-grid,
+  .spray-zone-grid,
+  .action-grid,
+  .mission-layout,
+  .mission-actions,
+  .autonomy-status-grid {
+    grid-template-columns: 1fr;
   }
 
   .rotate-overlay {
-    position: fixed;
-    inset: 0;
-    z-index: 10;
-    display: grid;
-    place-items: center;
-    padding: 20px;
-    background: linear-gradient(180deg, #14251a, var(--bg));
-  }
-
-  .app-shell {
     display: none;
   }
 }

@@ -246,6 +246,10 @@ class ESP32Client:
                 self._serial_request(f"PUMP {side} {'on' if enabled else 'off'}")
             elif self._config.firmware_mode == "advanced":
                 self._http_request("/api/pump", {"side": side, "state": "on" if enabled else "off"})
+            else:
+                raise RuntimeError(
+                    "Legacy firmware pump control ni qo'llab-quvvatlamaydi. Advanced firmware yoki serial transport ishlating."
+                )
             self._state.update_pumps(**{side: enabled})
         except Exception as exc:  # noqa: BLE001
             self._mark_offline(exc)

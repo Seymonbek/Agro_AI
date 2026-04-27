@@ -68,19 +68,22 @@
       "name": "front",
       "source": "external:0",
       "enabled": true,
-      "detect_flowers": true
+      "detect_flowers": true,
+      "rotate_180": true
     },
     {
       "name": "left",
       "source": "external:1",
       "enabled": true,
-      "detect_flowers": false
+      "detect_flowers": false,
+      "rotate_180": true
     },
     {
       "name": "right",
       "source": "external:2",
       "enabled": true,
-      "detect_flowers": false
+      "detect_flowers": false,
+      "rotate_180": true
     }
   ]
 }
