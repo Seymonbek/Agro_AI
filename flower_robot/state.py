@@ -24,6 +24,8 @@ class RobotStateStore:
                 "auto_spray": settings.auto_spray.default_enabled,
                 "manual_spray": False,
                 "manual_spray_pumps": [],
+                "spray_latch": False,
+                "spray_latch_pumps": [],
             },
             "esp32": {
                 "online": False,

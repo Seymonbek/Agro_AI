@@ -219,6 +219,49 @@ class FlowerRobotHttpTests(unittest.TestCase):
         self.assertEqual(snapshot["last_camera"], "manual")
         self.assertEqual(snapshot["last_pumps"], ["left", "right"])
 
+    def test_spray_latch_sets_and_clears_without_heartbeat(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]
+
+        status, body = self.post_json("/api/control/spray-latch", {"enabled": True})
+
+        self.assertEqual(status, 200)
+        self.assertIn('"enabled": true', body)
+        self.assertEqual(calls, [("left", True), ("right", True)])
+        control = self.context.state.snapshot()["control"]
+        self.assertTrue(control["spray_latch"])
+        self.assertEqual(control["spray_latch_pumps"], ["left", "right"])
+
+        time.sleep(0.2)
+        self.assertEqual(calls, [("left", True), ("right", True)])
+
+        status, body = self.post_json("/api/control/spray-latch", {"enabled": False})
+
+        self.assertEqual(status, 200)
+        self.assertIn('"enabled": false', body)
+        self.assertEqual(
+            calls,
+            [("left", True), ("right", True), ("left", False), ("right", False)],
+        )
+        control = self.context.state.snapshot()["control"]
+        self.assertFalse(control["spray_latch"])
+        self.assertEqual(control["spray_latch_pumps"], [])
+
+    def test_stop_clears_spray_latch(self) -> None:
+        calls: list[tuple[str, bool]] = []
+        self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]
+        self.context.esp32.stop = lambda: None  # type: ignore[method-assign]
+
+        self.context.handle_spray_latch({"enabled": True})
+        response = self.context.handle_stop({})
+
+        self.assertEqual(response["ok"], True)
+        self.assertFalse(self.context.state.snapshot()["control"]["spray_latch"])
+        self.assertEqual(
+            calls,
+            [("left", True), ("right", True), ("left", False), ("right", False)],
+        )
+
     def test_manual_spray_watchdog_turns_off_when_heartbeat_stops(self) -> None:
         calls: list[tuple[str, bool]] = []
         self.context.esp32.set_pump = lambda side, enabled: calls.append((side, enabled))  # type: ignore[method-assign]

@@ -71,8 +71,8 @@ class DetectionEngine:
             return frame, DetectionResult(detections=0, last_detection=None, centered_detection=None)
 
         view = frame.copy()
-        center_x = view.shape[1] // 2
-        cv2.line(view, (center_x, 0), (center_x, view.shape[0]), (255, 214, 102), 2)
+        center_y = view.shape[0] // 2
+        cv2.line(view, (0, center_y), (view.shape[1], center_y), (255, 214, 102), 2)
 
         detections: list[dict[str, Any]] = []
         centered_detection: dict[str, Any] | None = None
@@ -150,7 +150,7 @@ class DetectionEngine:
             return []
 
         class_names = self._class_names(results[0])
-        center_x = view.shape[1] // 2
+        center_y = view.shape[0] // 2
         detections: list[dict[str, Any]] = []
         for box in results[0].boxes:
             raw_x1, raw_y1, raw_x2, raw_y2 = [int(value) for value in box.xyxy[0].tolist()]
@@ -160,12 +160,13 @@ class DetectionEngine:
             y2 = min(raw_y2 + offset_y, view.shape[0] - 1)
             conf = float(box.conf[0]) if box.conf is not None else 0.0
             class_name = self._box_label(box, class_names)
-            object_center = int((x1 + x2) / 2)
-            offset = object_center - center_x
+            object_center_x = int((x1 + x2) / 2)
+            object_center_y = int((y1 + y2) / 2)
+            offset = object_center_y - center_y
             is_centered = abs(offset) < self._settings.auto_spray.center_tolerance_px
             color = (75, 211, 164) if is_centered else (248, 113, 113)
             cv2.rectangle(view, (x1, y1), (x2, y2), color, 2)
-            cv2.circle(view, (object_center, int((y1 + y2) / 2)), 5, color, -1)
+            cv2.circle(view, (object_center_x, object_center_y), 5, color, -1)
             label = f"{class_name} {conf:.2f}"
             cv2.putText(
                 view,
@@ -389,7 +390,7 @@ class CameraWorker:
             frame[:] = (20, 31, 27)
             cv2.rectangle(frame, (0, 0), (width, height), (30, 47, 39), -1)
             if self._should_draw_center_line():
-                cv2.line(frame, (width // 2, 0), (width // 2, height), (255, 214, 102), 2)
+                cv2.line(frame, (0, height // 2), (width, height // 2), (255, 214, 102), 2)
 
             lane_top = width // 2 - 74
             lane_bottom = width // 2 - 150
@@ -498,8 +499,8 @@ class CameraWorker:
             if self._should_draw_center_line():
                 cv2.line(
                     view,
-                    (view.shape[1] // 2, 0),
-                    (view.shape[1] // 2, view.shape[0]),
+                    (0, view.shape[0] // 2),
+                    (view.shape[1], view.shape[0] // 2),
                     (255, 214, 102),
                     2,
                 )

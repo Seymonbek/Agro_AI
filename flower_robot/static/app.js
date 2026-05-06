@@ -22,6 +22,9 @@ const state = {
   turnBusy: false,
   manualSprayActive: false,
   manualSprayDesired: false,
+  sprayLatchActive: false,
+  sprayLatchDesired: false,
+  sprayLatchPending: false,
 };
 
 const TURN_FACTOR = 1.15;
@@ -53,6 +56,8 @@ const elements = {
   speedValue: document.getElementById("speedValue"),
   speedSlider: document.getElementById("speedSlider"),
   manualSprayButton: document.getElementById("manualSprayButton"),
+  sprayLatchButton: document.getElementById("sprayLatchButton"),
+  sprayLatchLabel: document.getElementById("sprayLatchLabel"),
   stopButton: document.getElementById("stopButton"),
   autoSprayToggle: document.getElementById("autoSprayToggle"),
   turnLeftButton: document.getElementById("turnLeftButton"),
@@ -494,7 +499,11 @@ window.addEventListener("blur", () => {
 });
 
 elements.stopButton.addEventListener("click", async () => {
-  await Promise.all([clearDriveAndStop({ force: true }), setManualSpray(false, { force: true })]);
+  await Promise.all([
+    clearDriveAndStop({ force: true }),
+    setManualSpray(false, { force: true }),
+    setSprayLatch(false, { force: true }),
+  ]);
 });
 
 elements.turnLeft90Button.addEventListener("click", async () => {
@@ -521,6 +530,15 @@ elements.autoSprayToggle.addEventListener("change", async () => {
 function renderManualSprayButton(enabled) {
   elements.manualSprayButton.classList.toggle("spraying", enabled);
   elements.manualSprayButton.setAttribute("aria-pressed", String(enabled));
+}
+
+function renderSprayLatchButton(enabled, pending = false) {
+  elements.sprayLatchButton.classList.toggle("latched", enabled);
+  elements.sprayLatchButton.setAttribute("aria-pressed", String(enabled));
+  elements.sprayLatchButton.disabled = pending;
+  elements.sprayLatchLabel.textContent = pending
+    ? (enabled ? "Sepish ON..." : "Sepish OFF...")
+    : (enabled ? "Sepish ON" : "Sepish OFF");
 }
 
 function syncManualSprayHeartbeat() {
@@ -597,6 +615,51 @@ elements.manualSprayButton.addEventListener("pointercancel", (event) => {
 
 elements.manualSprayButton.addEventListener("lostpointercapture", (event) => {
   releaseManualSprayPointer(event);
+});
+
+async function sendSprayLatchCommand(enabled) {
+  const response = await postJson("/api/control/spray-latch", { enabled });
+  if (!response.ok) {
+    console.warn("Latch spray buyrug'i yuborilmadi", response);
+  }
+  return response;
+}
+
+async function setSprayLatch(enabled, { force = false } = {}) {
+  if (state.sprayLatchPending && !force) {
+    return { ok: false, error: "spray_latch_pending" };
+  }
+  if (!force && state.sprayLatchDesired === enabled) {
+    return { ok: true, skipped: "same_state" };
+  }
+
+  const previousDesired = state.sprayLatchDesired;
+  const previousActive = state.sprayLatchActive;
+  state.sprayLatchDesired = enabled;
+  state.sprayLatchActive = enabled;
+  state.sprayLatchPending = true;
+  renderSprayLatchButton(enabled, true);
+
+  const response = await sendSprayLatchCommand(enabled);
+  state.sprayLatchPending = false;
+  if (!response.ok || response.ignored) {
+    state.sprayLatchDesired = previousDesired;
+    state.sprayLatchActive = previousActive;
+    renderSprayLatchButton(previousActive, false);
+    return response;
+  }
+
+  state.sprayLatchDesired = Boolean(response.enabled);
+  state.sprayLatchActive = Boolean(response.enabled);
+  renderSprayLatchButton(state.sprayLatchActive, false);
+  elements.motionBadge.textContent = state.sprayLatchActive
+    ? "Harakat: sepish ON"
+    : "Harakat: sepish OFF";
+  return response;
+}
+
+elements.sprayLatchButton.addEventListener("click", async () => {
+  await setSprayLatch(!state.sprayLatchDesired);
 });
 
 function renderMissionSpeed() {
@@ -733,7 +796,7 @@ function cameraMeta(camera, fallback) {
   const centered = detection.centered ? "CENTER" : "offset";
   const label = detection.label || "flower";
   const source = detection.source ? ` | ${detection.source}` : "";
-  return `FPS ${camera.fps} | det ${camera.detections} | ${label} | ${centered} ${detection.offset_px}px | conf ${detection.confidence}${source}`;
+  return `FPS ${camera.fps} | det ${camera.detections} | ${label} | ${centered} Y ${detection.offset_px}px | conf ${detection.confidence}${source}`;
 }
 
 function renderPumpStates(pumps) {
@@ -847,6 +910,11 @@ async function refreshState() {
       syncManualSprayHeartbeat();
       renderManualSprayButton(state.manualSprayActive);
     }
+    if (!state.sprayLatchPending) {
+      state.sprayLatchActive = Boolean(control.spray_latch);
+      state.sprayLatchDesired = state.sprayLatchActive;
+      renderSprayLatchButton(state.sprayLatchActive, false);
+    }
     state.speedLimit = Number(control.speed_limit || state.speedLimit);
     elements.speedSlider.value = String(state.speedLimit);
     renderSpeed();
@@ -871,6 +939,7 @@ elements.cameraCards.forEach((card) => {
 blockSelectionAndCopyUI();
 syncTurnButtons();
 renderCameraFocus();
+renderSprayLatchButton(false, false);
 setPage(
   location.hash === "#diagnostics"
     ? "diagnostics"

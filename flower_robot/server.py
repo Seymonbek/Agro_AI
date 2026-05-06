@@ -26,6 +26,7 @@ MAX_COMMAND_TTL_MS = 5000
 MAX_FUTURE_COMMAND_SKEW_MS = 2000
 MANUAL_SPRAY_HOLD_TIMEOUT_SEC = 1.4
 MANUAL_SPRAY_OWNER = "manual_spray"
+SPRAY_LATCH_OWNER = "spray_latch"
 
 
 class RequestJsonError(ValueError):
@@ -116,6 +117,10 @@ class RequestHandler(BaseHTTPRequestHandler):
                 return
             if path == "/api/control/spray":
                 response = self.context.handle_manual_spray(payload)
+                self._send_json(HTTPStatus.OK, response)
+                return
+            if path == "/api/control/spray-latch":
+                response = self.context.handle_spray_latch(payload)
                 self._send_json(HTTPStatus.OK, response)
                 return
             if path == "/api/control/auto-spray":
@@ -244,6 +249,9 @@ class AppContext:
         self._manual_spray_active = False
         self._manual_spray_pumps: tuple[str, ...] = ()
         self._manual_spray_last_seen = 0.0
+        self._spray_latch_lock = threading.Lock()
+        self._spray_latch_active = False
+        self._spray_latch_pumps: tuple[str, ...] = ()
 
     def start_background_tasks(self) -> None:
         self.vision.start()
@@ -477,6 +485,7 @@ class AppContext:
         self.autonomy.stop("manual stop")
         self._turn_manual_lock_until = 0.0
         self._clear_manual_spray_state()
+        self._clear_spray_latch_state()
         self.esp32.stop()
         self.state.update_control(left=0.0, right=0.0, last_command="stop", mode="manual")
         return {"ok": True}
@@ -567,6 +576,48 @@ class AppContext:
         )
         if was_active:
             self._release_pump_claims(MANUAL_SPRAY_OWNER, pumps_to_stop)
+        return {"ok": True, "enabled": False, "pumps": list(pumps_to_stop)}
+
+    def handle_spray_latch(self, payload: dict[str, Any]) -> dict[str, Any]:
+        ignored = self._ignore_stale_realtime_command(payload)
+        if ignored:
+            return ignored
+
+        if "enabled" not in payload:
+            raise ValueError("enabled true/false bo'lishi kerak.")
+        enabled = self._bool_payload(payload, "enabled")
+        pumps = self._parse_pumps_payload(payload)
+
+        if enabled:
+            with self._spray_latch_lock:
+                previous_pumps = self._spray_latch_pumps
+                should_reconfigure = (not self._spray_latch_active) or previous_pumps != pumps
+                self._spray_latch_active = True
+                self._spray_latch_pumps = pumps
+            self.state.update_control(
+                spray_latch=True,
+                spray_latch_pumps=list(pumps),
+                last_command="spray_latch_on",
+            )
+            if should_reconfigure and previous_pumps and previous_pumps != pumps:
+                self._release_pump_claims(SPRAY_LATCH_OWNER, previous_pumps)
+            if should_reconfigure:
+                self._acquire_pump_claims(SPRAY_LATCH_OWNER, pumps)
+                self._record_spray_trigger("latch", pumps)
+            return {"ok": True, "enabled": True, "pumps": list(pumps)}
+
+        with self._spray_latch_lock:
+            pumps_to_stop = self._spray_latch_pumps or pumps
+            was_active = self._spray_latch_active
+            self._spray_latch_active = False
+            self._spray_latch_pumps = ()
+        self.state.update_control(
+            spray_latch=False,
+            spray_latch_pumps=[],
+            last_command="spray_latch_off",
+        )
+        if was_active:
+            self._release_pump_claims(SPRAY_LATCH_OWNER, pumps_to_stop)
         return {"ok": True, "enabled": False, "pumps": list(pumps_to_stop)}
 
     def handle_auto_spray(self, payload: dict[str, Any]) -> dict[str, Any]:
@@ -706,6 +757,15 @@ class AppContext:
         if pumps_to_release:
             self._release_pump_claims(MANUAL_SPRAY_OWNER, pumps_to_release)
         self.state.update_control(manual_spray=False, manual_spray_pumps=[])
+
+    def _clear_spray_latch_state(self) -> None:
+        with self._spray_latch_lock:
+            pumps_to_release = self._spray_latch_pumps
+            self._spray_latch_active = False
+            self._spray_latch_pumps = ()
+        if pumps_to_release:
+            self._release_pump_claims(SPRAY_LATCH_OWNER, pumps_to_release)
+        self.state.update_control(spray_latch=False, spray_latch_pumps=[])
 
     def _expire_manual_spray_if_needed(self, now: float) -> None:
         with self._manual_spray_lock:

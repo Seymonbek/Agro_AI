@@ -30,7 +30,7 @@ def run_legacy_dual_camera_demo(settings: AppSettings) -> None:
         frame_left = cv2.resize(frame_left, (640, 480))
         frame_right = cv2.resize(frame_right, (640, 480))
         height, width, _ = frame_left.shape
-        center_x = width // 2
+        center_y = height // 2
 
         results = model.predict(
             [frame_left, frame_right],
@@ -48,7 +48,7 @@ def run_legacy_dual_camera_demo(settings: AppSettings) -> None:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 flower_center_x = int((x1 + x2) / 2)
                 flower_center_y = int((y1 + y2) / 2)
-                centered = abs(flower_center_x - center_x) < 40
+                centered = abs(flower_center_y - center_y) < 40
 
                 cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
                 cv2.circle(frame, (flower_center_x, flower_center_y), 5, color, -1)
@@ -63,7 +63,7 @@ def run_legacy_dual_camera_demo(settings: AppSettings) -> None:
                         3,
                     )
 
-            cv2.line(frame, (center_x, 0), (center_x, height), (255, 227, 122), 2)
+            cv2.line(frame, (0, center_y), (width, center_y), (255, 227, 122), 2)
             cv2.putText(frame, title, (200, 30), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
 
         dashboard = np.hstack((frame_left, frame_right))

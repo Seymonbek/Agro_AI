@@ -111,13 +111,22 @@
           <section class="speed-box" aria-label="Tezlik boshqaruvi">
             <strong class="speed-readout">Tezlik: <span id="speedValue">120</span> / 255</strong>
             <input id="speedSlider" type="range" min="0" max="255" value="120" />
-            <button class="manual-spray-button" id="manualSprayButton" type="button" aria-pressed="false">
-              <svg class="spray-icon" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M12 3.5c2.7 3.2 5 6.4 5 9.1a5 5 0 0 1-10 0c0-2.7 2.3-5.9 5-9.1Z" />
-                <path d="M9.8 15.6c.6.7 1.3 1 2.2 1" />
-              </svg>
-              <span>Sepish</span>
-            </button>
+            <div class="spray-actions" aria-label="Sepish boshqaruvi">
+              <button class="manual-spray-button" id="manualSprayButton" type="button" aria-pressed="false">
+                <svg class="spray-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3.5c2.7 3.2 5 6.4 5 9.1a5 5 0 0 1-10 0c0-2.7 2.3-5.9 5-9.1Z" />
+                  <path d="M9.8 15.6c.6.7 1.3 1 2.2 1" />
+                </svg>
+                <span>Sepish</span>
+              </button>
+              <button class="manual-spray-button spray-latch-button" id="sprayLatchButton" type="button" aria-pressed="false">
+                <svg class="spray-icon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M12 3.5c2.7 3.2 5 6.4 5 9.1a5 5 0 0 1-10 0c0-2.7 2.3-5.9 5-9.1Z" />
+                  <path d="M9.8 15.6c.6.7 1.3 1 2.2 1" />
+                </svg>
+                <span id="sprayLatchLabel">Sepish OFF</span>
+              </button>
+            </div>
           </section>
 
           <section class="control-rail move-column" aria-label="Oldinga va orqaga tugmalari">
